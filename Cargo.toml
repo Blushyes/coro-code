@@ -13,6 +13,18 @@ description = "Coro Code - A high-performance AI coding agent written in Rust"
 keywords = ["ai", "agent", "llm", "cli", "automation"]
 categories = ["command-line-utilities", "development-tools"]
 
+# Enable minimal optimizations in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable higher-level optimizations for dependencies, but not for our own code
+[profile.dev.package."*"]
+opt-level = 3
+
+# Link Time Optimization: Sacrifice compile time for more performance
+[profile.release]
+lto = "thin"
+
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
