@@ -34,28 +34,32 @@ show_help() {
   recho \
     "用法: $0 [选项] [API_TOKEN]
 选项:
-  -h, --help    显示此帮助信息
-  -n, --dry-run 只进行预检，不实际发布
-  -y, --yes     自动确认发布，无需交互
+  -h, --help         显示此帮助信息
+  -n, --dry-run      只进行预检，不实际发布
+  -y, --yes          自动确认发布，无需交互
+  -r, --registry     指定要发布的注册表（例如：crates-io）
 参数:
-  API_TOKEN     crates.io 的 API 令牌（可选，也可以通过 CARGO_REGISTRY_TOKEN 环境变量设置）
+  API_TOKEN          crates.io 的 API 令牌（可选，也可以通过 CARGO_REGISTRY_TOKEN 环境变量设置）
 示例:
   $0                       # 使用已保存的令牌或环境变量
   $0 -n                    # 预检模式
   $0 -y                    # 自动确认发布
+  $0 -r crates-io          # 指定注册表
   $0 YOUR_API_TOKEN        # 使用指定的 API 令牌
   CARGO_REGISTRY_TOKEN=YOUR_API_TOKEN $0  # 通过环境变量设置令牌" \
     "Usage: $0 [options] [API_TOKEN]
 Options:
-  -h, --help    Show this help message
-  -n, --dry-run Dry run mode, only performs checks without publishing
-  -y, --yes     Automatically confirm publication without interaction
+  -h, --help         Show this help message
+  -n, --dry-run      Dry run mode, only performs checks without publishing
+  -y, --yes          Automatically confirm publication without interaction
+  -r, --registry     Specify the registry to publish to (e.g., crates-io)
 Arguments:
-  API_TOKEN     API token for crates.io (optional, can also be set via CARGO_REGISTRY_TOKEN environment variable)
+  API_TOKEN          API token for crates.io (optional, can also be set via CARGO_REGISTRY_TOKEN environment variable)
 Examples:
   $0                       # Use saved token or environment variable
   $0 -n                    # Dry run mode
   $0 -y                    # Automatically confirm publication
+  $0 -r crates-io          # Specify registry
   $0 YOUR_API_TOKEN        # Use specified API token
   CARGO_REGISTRY_TOKEN=YOUR_API_TOKEN $0  # Set token via environment variable"
 }
@@ -63,6 +67,7 @@ Examples:
 # 默认参数 | Default arguments
 DRY_RUN=false
 AUTO_CONFIRM=false
+REGISTRY=""
 
 # 解析命令行参数 | Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -79,6 +84,10 @@ while [[ $# -gt 0 ]]; do
       AUTO_CONFIRM=true
       shift
       ;;
+    -r|--registry)
+      REGISTRY="$2"
+      shift 2
+      ;;
     -*)
       recho \
         "${RED}错误: 未知选项 $1${NC}" \
@@ -92,6 +101,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# 构建 cargo publish 命令的参数 | Build cargo publish command arguments
+CARGO_PUBLISH_ARGS=""
+if [ -n "$REGISTRY" ]; then
+  CARGO_PUBLISH_ARGS="--registry $REGISTRY"
+fi
 
 # 检查是否已安装 cargo | Check if cargo is installed
 if ! command -v cargo &> /dev/null; then
@@ -213,21 +228,69 @@ recho \
   "${YELLOW}正在确定发布顺序...${NC}" \
   "${YELLOW}Determining publish order...${NC}"
 
-# 创建一个临时文件来存储包及其依赖关系 | Create a temporary file to store packages and their dependencies
-temp_file=$(mktemp)
-trap 'rm -f "$temp_file"' EXIT
+# 创建一个数组来存储包及其依赖关系 | Create an array to store packages and their dependencies
+declare -A dependencies
 
 # 解析依赖关系 | Parse dependencies
 while IFS= read -r member; do
   # 获取直接依赖 | Get direct dependencies
-  deps=$(echo "$metadata" | jq -r --arg name "$member" '.packages[] | select(.name == $name) | .dependencies[] | select(.name | startswith("coro-")) | .name' | tr '\n' ' ')
+  deps=$(echo "$metadata" | jq -r --arg name "$member" '.packages[] | select(.name == $name) | .dependencies[] | select(.name | startswith("coro-")) | .name')
 
-  echo "$member:$deps" >> "$temp_file"
+  # 将依赖关系存储在数组中
+  dependencies["$member"]="$deps"
 done <<< "$members"
 
-# 使用拓扑排序确定发布顺序 | Use topological sort to determine publish order
-publish_order=$(tsort "$temp_file" 2>/dev/null)
-if [ $? -ne 0 ]; then
+# 使用 Kahn 算法进行拓扑排序 | Use Kahn's algorithm for topological sorting
+# 初始化入度数组 | Initialize the in-degree array
+declare -A in_degree
+for member in $members; do
+  in_degree["$member"]=0
+done
+
+# 计算每个节点的入度 | Calculate the in-degree of each node
+for member in $members; do
+  deps=${dependencies["$member"]}
+  for dep in $deps; do
+    if [[ -n "${in_degree[$dep]}" ]]; then
+      in_degree["$dep"]=$((${in_degree["$dep"]} + 1))
+    fi
+  done
+done
+
+# 初始化队列 | Initialize the queue
+queue=()
+for member in $members; do
+  if [[ ${in_degree["$member"]} -eq 0 ]]; then
+    queue+=("$member")
+  fi
+done
+
+# 拓扑排序结果 | Topological sort result
+publish_order=()
+
+# Kahn 算法主循环 | Kahn's algorithm main loop
+while [[ ${#queue[@]} -gt 0 ]]; do
+  # 取出队列中的第一个元素 | Remove the first element from the queue
+  current=${queue[0]}
+  queue=("${queue[@]:1}")
+
+  # 添加到发布顺序中 | Add to the publish order
+  publish_order+=("$current")
+
+  # 更新其依赖项的入度 | Update the in-degree of its dependencies
+  deps=${dependencies["$current"]}
+  for dep in $deps; do
+    if [[ -n "${in_degree[$dep]}" ]]; then
+      in_degree["$dep"]=$((${in_degree["$dep"]} - 1))
+      if [[ ${in_degree["$dep"]} -eq 0 ]]; then
+        queue+=("$dep")
+      fi
+    fi
+  done
+done
+
+# 检查是否存在循环依赖 | Check for circular dependencies
+if [[ ${#publish_order[@]} -ne $(echo "$members" | wc -w) ]]; then
   recho \
     "${RED}错误: 无法确定发布顺序，请检查包之间的依赖关系是否存在循环。${NC}" \
     "${RED}Error: Could not determine publish order, please check for circular dependencies between packages.${NC}"
@@ -235,13 +298,16 @@ if [ $? -ne 0 ]; then
 fi
 
 # 反转顺序以获得正确的发布顺序 | Reverse the order to get the correct publish order
-publish_order=$(echo "$publish_order" | tac)
+publish_order_reversed=()
+for ((i=${#publish_order[@]}-1; i>=0; i--)); do
+  publish_order_reversed+=("${publish_order[i]}")
+done
 
 # 显示发布顺序 | Show publish order
 recho \
   "${YELLOW}发布顺序:${NC}" \
   "${YELLOW}Publish order:${NC}"
-echo "$publish_order"
+printf '%s\n' "${publish_order_reversed[@]}"
 
 # 发布包 | Publish packages
 recho \
@@ -249,33 +315,20 @@ recho \
   "${YELLOW}Starting${DRY_RUN:+ dry run} package publication...${NC}"
 
 # 遍历发布顺序并发布每个包 | Iterate through the publish order and publish each package
-for package in $publish_order; do
-  package_dir=""
-  case $package in
-    coro-core)
-      package_dir="core"
-      ;;
-    coro-cli)
-      package_dir="cli"
-      ;;
-    *)
-      recho \
-        "${YELLOW}跳过未知包: $package${NC}" \
-        "${YELLOW}Skipping unknown package: $package${NC}"
-      continue
-      ;;
-  esac
+for package in "${publish_order_reversed[@]}"; do
+  # 查找包的目录 | Find package directory
+  package_dir=$(echo "$metadata" | jq -r --arg name "$package" '.packages[] | select(.name == $name) | .manifest_path' | xargs dirname)
 
   if [ -d "$package_dir" ] && [ -f "$package_dir/Cargo.toml" ]; then
     recho \
       "${YELLOW}正在${DRY_RUN:+预检}发布 $package 包……${NC}" \
       "${YELLOW}${DRY_RUN:+Dry run: }Publishing $package package...${NC}"
-    
-    cd "$REPO_DIR/$package_dir" || exit 1
-    
+
+    cd "$package_dir" || exit 1
+
     if [ "$DRY_RUN" = true ]; then
       # 预检模式 | Dry run mode
-      cargo publish --dry-run
+      cargo publish --dry-run $CARGO_PUBLISH_ARGS
       if [ $? -eq 0 ]; then
         recho \
           "${GREEN}$package 包预检成功${NC}" \
@@ -288,7 +341,7 @@ for package in $publish_order; do
       fi
     else
       # 实际发布模式 | Actual publish mode
-      cargo publish
+      cargo publish $CARGO_PUBLISH_ARGS
       if [ $? -eq 0 ]; then
         recho \
           "${GREEN}$package 包发布成功${NC}" \
@@ -299,16 +352,16 @@ for package in $publish_order; do
           "${RED}Error: $package package publication failed${NC}"
         exit 1
       fi
-      
+
       # 如果不是最后一个包，则等待几秒钟 | Wait a few seconds if it's not the last package
-      if [ "$package" != "$(echo "$publish_order" | tail -n 1)" ]; then
+      if [ "$package" != "${publish_order_reversed[-1]}" ]; then
         recho \
           "${YELLOW}等待 10 秒钟以确保 $package 包在 crates.io 上可用...${NC}" \
           "${YELLOW}Waiting 10 seconds to ensure $package package is available on crates.io...${NC}"
         sleep 10
       fi
     fi
-    
+
     cd "$REPO_DIR" || exit 1
   else
     recho \
