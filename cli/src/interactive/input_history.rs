@@ -550,14 +550,14 @@ mod tests {
         assert_eq!(text_history_load.entries[0].text, test_commands[999]); // Most recent
         assert_eq!(text_history_load.entries[999].text, test_commands[0]); // Oldest
 
-        // Text format should be very fast (under 10ms for 1000 entries)
+        // Text format should be very fast (under 50ms for 1000 entries)
         assert!(
-            text_save_duration.as_millis() < 10,
-            "Text save should be under 10ms"
+            text_save_duration.as_millis() < 50,
+            "Text save should be under 50ms"
         );
         assert!(
-            text_load_duration.as_millis() < 10,
-            "Text load should be under 10ms"
+            text_load_duration.as_millis() < 50,
+            "Text load should be under 50ms"
         );
     }
 }

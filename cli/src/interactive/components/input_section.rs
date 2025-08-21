@@ -141,6 +141,7 @@ pub struct EnhancedTextInputProps {
     pub on_change: Handler<'static, String>,
     pub on_submit: Handler<'static, String>,
     pub on_cursor_position_change: Handler<'static, (usize, usize)>, // (line, column)
+    pub on_file_list_state_change: Handler<'static, bool>,           // Track file list visibility
     pub width: u16,
     pub placeholder: String,
     pub color: Option<Color>,
@@ -156,6 +157,7 @@ impl Default for EnhancedTextInputProps {
             on_change: Handler::default(),
             on_submit: Handler::default(),
             on_cursor_position_change: Handler::default(),
+            on_file_list_state_change: Handler::default(),
             width: 80,
             placeholder: String::new(),
             color: None,
@@ -199,6 +201,7 @@ pub fn EnhancedTextInput(
         let mut on_change = props.on_change.take();
         let mut on_submit = props.on_submit.take();
         let mut on_cursor_position_change = props.on_cursor_position_change.take();
+        let mut on_file_list_state_change = props.on_file_list_state_change.take();
         let mut value = props.value.clone();
         let mut cursor_pos = cursor_pos;
         let mut show_file_list = show_file_list;
@@ -269,6 +272,7 @@ pub fn EnhancedTextInput(
                                 if recent_text && matches!(code, KeyCode::Enter) {
                                     // Close popup and let the general handler below process Enter as newline
                                     show_file_list.set(false);
+                                    on_file_list_state_change(false);
                                     // fallthrough to general handling by not returning
                                 } else {
                                     // Insert selected file
@@ -304,11 +308,13 @@ pub fn EnhancedTextInput(
                                         }
                                     }
                                     show_file_list.set(false);
+                                    on_file_list_state_change(false);
                                     return;
                                 }
                             }
                             KeyCode::Esc => {
                                 show_file_list.set(false);
+                                on_file_list_state_change(false);
                                 return;
                             }
                             _ => {}
@@ -375,12 +381,14 @@ pub fn EnhancedTextInput(
                                             selected_file_index.set(0);
                                             current_query.set(query);
                                             show_file_list.set(true);
+                                            on_file_list_state_change(true);
                                         }
                                     }
                                 }
                             } else {
                                 // Should not show list, hide it
                                 show_file_list.set(false);
+                                on_file_list_state_change(false);
                             }
                         }
                         KeyCode::Backspace => {
@@ -451,12 +459,14 @@ pub fn EnhancedTextInput(
                                                     selected_file_index.set(0);
                                                     current_query.set(query);
                                                     show_file_list.set(true);
+                                                    on_file_list_state_change(true);
                                                 }
                                             }
                                         }
                                     } else {
                                         // Should not show list, hide it
                                         show_file_list.set(false);
+                                        on_file_list_state_change(false);
                                     }
                                 }
                             }
@@ -524,6 +534,7 @@ pub fn EnhancedTextInput(
                                             } else {
                                                 // No valid query found, hide the list
                                                 show_file_list.set(false);
+                                                on_file_list_state_change(false);
                                             }
                                         }
                                     }
@@ -1083,6 +1094,9 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
     let project_path = context.project_path.clone();
     let ui_sender = context.ui_sender.clone();
 
+    // State to track file list visibility for history navigation
+    let file_list_visible = hooks.use_state(|| false);
+
     // Handle keyboard events for task interruption and history navigation
     hooks.use_terminal_events({
         let ui_sender = ui_sender.clone();
@@ -1105,8 +1119,8 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                             }
                         }
                         KeyCode::Up => {
-                            // Navigate to previous history entry
-                            if !*is_task_running.read() {
+                            // Navigate to previous history entry only if file list is not showing
+                            if !*is_task_running.read() && !*file_list_visible.read() {
                                 let current_input = input_value.read().clone();
                                 if let Some(history_text) =
                                     input_history.write().navigate_previous(&current_input)
@@ -1117,8 +1131,8 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                             }
                         }
                         KeyCode::Down => {
-                            // Navigate to next history entry
-                            if !*is_task_running.read() {
+                            // Navigate to next history entry only if file list is not showing
+                            if !*is_task_running.read() && !*file_list_visible.read() {
                                 if let Some(history_text) = input_history.write().navigate_next() {
                                     input_value.set(history_text.clone());
                                     cursor_position.set((1, history_text.len() + 1));
@@ -1161,6 +1175,12 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                     let mut cursor_position = cursor_position;
                     move |(line, col)| {
                         cursor_position.set((line, col));
+                    }
+                },
+                on_file_list_state_change: {
+                    let mut file_list_visible = file_list_visible;
+                    move |is_visible| {
+                        file_list_visible.set(is_visible);
                     }
                 },
                 on_submit: {
