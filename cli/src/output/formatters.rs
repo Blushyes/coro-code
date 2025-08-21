@@ -261,9 +261,8 @@ impl DiffFormatter {
     ) -> String {
         let mut result = String::new();
 
-        result.push_str(&format!("╭{:─<120}╮\n", ""));
-        result.push_str(&format!("│ {:<118} │\n", file_name));
-        result.push_str(&format!("│{:<120}│\n", ""));
+        result.push_str(&format!("{:<120}\n", file_name));
+        result.push_str(&format!("{:<120}\n", ""));
 
         let old_lines: Vec<&str> = old_content.map(|s| s.lines().collect()).unwrap_or_default();
         let new_lines: Vec<&str> = new_content.map(|s| s.lines().collect()).unwrap_or_default();
@@ -280,34 +279,26 @@ impl DiffFormatter {
                         self.format_line_with_background_and_prefix(old_lines[i], RED_BG, "-");
                     let new_line =
                         self.format_line_with_background_and_prefix(new_lines[i], GREEN_BG, "+");
-                    result.push_str(&format!(
-                        "│   {}{}{} {} │\n",
-                        GRAY, line_num, RESET, old_line
-                    ));
-                    result.push_str(&format!(
-                        "│   {}{}{} {} │\n",
-                        GRAY, line_num, RESET, new_line
-                    ));
+                    result.push_str(&format!("   {}{}{} {}\n", GRAY, line_num, RESET, old_line));
+                    result.push_str(&format!("   {}{}{} {}\n", GRAY, line_num, RESET, new_line));
                 } else {
                     // Unchanged line
                     let line = self.truncate_line(old_lines[i]);
                     result.push_str(&format!(
-                        "│   {}{}{}    {:<100} │\n",
+                        "   {}{}{}    {:<100}\n",
                         GRAY, line_num, RESET, line
                     ));
                 }
             } else if i < old_lines.len() {
                 // Deleted line
                 let line = self.format_line_with_background_and_prefix(old_lines[i], RED_BG, "-");
-                result.push_str(&format!("│   {}{}{} {} │\n", GRAY, line_num, RESET, line));
+                result.push_str(&format!("   {}{}{} {}\n", GRAY, line_num, RESET, line));
             } else if i < new_lines.len() {
                 // Added line
                 let line = self.format_line_with_background_and_prefix(new_lines[i], GREEN_BG, "+");
-                result.push_str(&format!("│   {}{}{} {} │\n", GRAY, line_num, RESET, line));
+                result.push_str(&format!("   {}{}{} {}\n", GRAY, line_num, RESET, line));
             }
         }
-
-        result.push_str(&format!("╰{:─<120}╯", ""));
 
         result
     }

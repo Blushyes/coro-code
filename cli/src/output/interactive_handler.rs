@@ -216,6 +216,41 @@ impl AgentOutput for InteractiveOutputHandler {
                     }
                 }
 
+                AgentEvent::CompressionStarted {
+                    level: _level,
+                    current_tokens: _current_tokens,
+                    target_tokens: _target_tokens,
+                    reason: _reason,
+                } => {
+                    // let msg = format!("Starting {} compression: {} → {} tokens", level, current_tokens, target_tokens);
+                    // let _ = ui_sender.send(InteractiveMessage::SystemMessage(msg));
+                    // TODO
+                }
+
+                AgentEvent::CompressionCompleted {
+                    tokens_saved,
+                    messages_before,
+                    messages_after,
+                    summary: _,
+                } => {
+                    let msg = format!(
+                        "Compression completed: {} → {} messages, saved {} tokens",
+                        messages_before, messages_after, tokens_saved
+                    );
+                    let _ = ui_sender.send(InteractiveMessage::SystemMessage(msg));
+                }
+
+                AgentEvent::CompressionFailed {
+                    error,
+                    fallback_action,
+                } => {
+                    let msg = format!(
+                        "Compression failed: {}. Fallback: {}",
+                        error, fallback_action
+                    );
+                    let _ = ui_sender.send(InteractiveMessage::SystemMessage(msg));
+                }
+
                 _ => {
                     // Other events are handled by CLI output
                 }

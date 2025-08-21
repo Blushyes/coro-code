@@ -28,7 +28,9 @@ pub struct OpenAiClient {
     client: Client<OpenAIConfig>,
     model: String,
     // Store base URL to determine streaming compatibility at runtime
+    #[allow(dead_code)]
     base_url: String,
+    #[allow(dead_code)]
     headers: std::collections::HashMap<String, String>,
 }
 

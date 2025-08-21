@@ -66,7 +66,8 @@ impl AgentOutput for CliOutputHandler {
         match event {
             AgentEvent::ExecutionStarted { context } => {
                 debug!("Starting task execution...");
-                debug!("Task: {}", context.task);
+                debug!("Original goal: {}", context.original_goal);
+                debug!("Current task: {}", context.current_task);
                 debug!("Project path: {}", context.project_path);
 
                 // Don't show task execution header in normal mode
@@ -213,6 +214,39 @@ impl AgentOutput for CliOutputHandler {
                         error!("Error: {}", content);
                     }
                 }
+            }
+
+            AgentEvent::CompressionStarted {
+                level,
+                current_tokens,
+                target_tokens,
+                reason,
+            } => {
+                info!(
+                    "🗜️  Starting {} compression: {} → {} tokens ({})",
+                    level, current_tokens, target_tokens, reason
+                );
+            }
+
+            AgentEvent::CompressionCompleted {
+                summary,
+                tokens_saved,
+                messages_before,
+                messages_after,
+            } => {
+                info!(
+                    "✅ Compression completed: {} → {} messages, saved {} tokens",
+                    messages_before, messages_after, tokens_saved
+                );
+                debug!("Compression summary: {}", summary);
+            }
+
+            AgentEvent::CompressionFailed {
+                error,
+                fallback_action,
+            } => {
+                warn!("⚠️  Compression failed: {}", error);
+                info!("Fallback: {}", fallback_action);
             }
         }
 

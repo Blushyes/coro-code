@@ -89,8 +89,10 @@ pub struct TokenUsage {
 pub struct AgentExecutionContext {
     /// Agent configuration name or identifier
     pub agent_id: String,
-    /// Current task being executed
-    pub task: String,
+    /// Original goal from the first user request (never overwritten)
+    pub original_goal: String,
+    /// Current task being executed (can be updated with new queries)
+    pub current_task: String,
     /// Project path or working directory
     pub project_path: String,
     /// Maximum allowed steps
@@ -141,6 +143,25 @@ pub enum AgentEvent {
         level: MessageLevel,
         content: String,
         metadata: HashMap<String, serde_json::Value>,
+    },
+    /// Conversation compression started
+    CompressionStarted {
+        level: String,
+        current_tokens: u32,
+        target_tokens: u32,
+        reason: String,
+    },
+    /// Conversation compression completed
+    CompressionCompleted {
+        summary: String,
+        tokens_saved: u32,
+        messages_before: u32,
+        messages_after: u32,
+    },
+    /// Conversation compression failed
+    CompressionFailed {
+        error: String,
+        fallback_action: String,
     },
 }
 

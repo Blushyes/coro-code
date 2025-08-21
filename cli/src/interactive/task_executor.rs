@@ -145,7 +145,7 @@ pub async fn execute_agent_task_with_context(
     let agent_ref = agent_guard.as_mut().unwrap();
 
     // Execute task with conversation continuation
-    let task_future = agent_ref.continue_conversation(&task, &project_path);
+    let task_future = agent_ref.execute_task_with_context(&task, &project_path);
 
     // Listen for interruption signals
     let interrupt_future = async {

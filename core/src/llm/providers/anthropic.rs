@@ -16,6 +16,7 @@ pub struct AnthropicClient {
     api_key: String,
     base_url: String,
     model: String,
+    #[allow(dead_code)]
     headers: std::collections::HashMap<String, String>,
 }
 
@@ -194,13 +195,17 @@ struct AnthropicRequest {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
+    #[allow(dead_code)]
     id: String,
     model: String,
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     response_type: String,
+    #[allow(dead_code)]
     role: String,
     content: Vec<AnthropicContent>,
     stop_reason: String,
+    #[allow(dead_code)]
     stop_sequence: Option<String>,
     usage: Option<AnthropicUsage>,
 }
@@ -208,6 +213,7 @@ struct AnthropicResponse {
 #[derive(Debug, Deserialize)]
 struct AnthropicContent {
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     content_type: String,
     text: String,
 }

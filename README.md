@@ -156,7 +156,7 @@ coro --config custom.json "Analyze this codebase"
 | --------- | ------ | ---------------------------------- | ----------------------------------------------------------------------------- |
 | 🟡 Medium | 📋     | **Multi-model & Auto Routing**     | Auto model selection by task type, failure auto-downgrade & retry strategies  |
 | 🟡 Medium | 📋     | **Context Optimization & Caching** | File summary caching, duplicate reference deduplication, token budget control |
-| 🟡 Medium | 📋     | **Token Compression**               | Intelligent context compression, selective token reduction, adaptive context windows |
+| 🟡 Medium | ✅     | **Token Compression**               | Intelligent context compression, selective token reduction, adaptive context windows |
 | 🔵 Low    | 📋     | **MCP Extension Ecosystem**        | Common provider presets & templates, one-click start/stop external tools      |
 
 </details>

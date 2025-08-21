@@ -2,6 +2,7 @@
 
 use super::config::AgentConfig;
 use crate::agent::prompt::{build_system_prompt_with_context, build_user_message};
+use crate::agent::tokens::ConversationManager;
 use crate::agent::{Agent, AgentExecution, AgentResult};
 use crate::error::{AgentError, Result};
 use crate::llm::{ChatOptions, LlmClient, LlmMessage};
@@ -24,8 +25,10 @@ pub struct AgentCore {
     trajectory_recorder: Option<TrajectoryRecorder>,
     conversation_history: Vec<LlmMessage>,
     output: Box<dyn AgentOutput>,
+    #[allow(dead_code)]
     current_task_displayed: bool,
     execution_context: Option<AgentExecutionContext>,
+    conversation_manager: ConversationManager,
 }
 
 impl AgentCore {
@@ -59,6 +62,10 @@ impl AgentCore {
         let tool_registry = crate::tools::ToolRegistry::default();
         let tool_executor = tool_registry.create_executor(&agent_config.tools);
 
+        // Create unified conversation manager (simplified single component)
+        let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
+        let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
+
         Ok(Self {
             config: agent_config,
             llm_client,
@@ -68,6 +75,7 @@ impl AgentCore {
             output,
             current_task_displayed: false,
             execution_context: None,
+            conversation_manager,
         })
     }
 
@@ -106,6 +114,10 @@ impl AgentCore {
         // Create tool executor with custom registry
         let tool_executor = tool_registry.create_executor(&agent_config.tools);
 
+        // Create unified conversation manager (simplified single component)
+        let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
+        let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
+
         Ok(Self {
             config: agent_config,
             llm_client,
@@ -115,6 +127,7 @@ impl AgentCore {
             output,
             current_task_displayed: false,
             execution_context: None,
+            conversation_manager,
         })
     }
 
@@ -443,7 +456,73 @@ impl AgentCore {
     /// Trim conversation history to prevent token overflow
     /// Keeps the system prompt and recent messages, removes older conversation
     /// TODO
-    fn trim_conversation_history(&mut self, max_messages: usize) {
+    /// Apply intelligent compression to conversation history based on token usage
+    async fn apply_intelligent_compression(&mut self) -> Result<()> {
+        // Use the unified conversation manager - single method call!
+        match self
+            .conversation_manager
+            .maybe_compress(
+                self.conversation_history.clone(),
+                self.execution_context.as_ref(),
+            )
+            .await
+        {
+            Ok(result) => {
+                // Update conversation history
+                self.conversation_history = result.messages;
+
+                // If compression was applied, emit events
+                if let Some(summary) = result.compression_applied {
+                    // Emit compression started event
+                    let _ = self
+                        .output
+                        .emit_event(AgentEvent::CompressionStarted {
+                            level: summary.level.as_str().to_string(),
+                            current_tokens: summary.tokens_before,
+                            target_tokens: summary.tokens_after,
+                            reason: format!(
+                                "Token usage requires {} compression",
+                                summary.level.as_str()
+                            ),
+                        })
+                        .await;
+
+                    // Emit completion event
+                    let _ = self
+                        .output
+                        .emit_event(AgentEvent::CompressionCompleted {
+                            summary: summary.summary.clone(),
+                            tokens_saved: summary.tokens_saved,
+                            messages_before: summary.messages_before,
+                            messages_after: summary.messages_after,
+                        })
+                        .await;
+
+                    tracing::info!("Compression completed: {}", summary.summary);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Compression failed: {}. Falling back to simple trimming.",
+                    e
+                );
+                self.fallback_trim_conversation_history(50);
+
+                let _ = self
+                    .output
+                    .emit_event(AgentEvent::CompressionFailed {
+                        error: e.to_string(),
+                        fallback_action: "Simple message trimming applied".to_string(),
+                    })
+                    .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fallback simple trim for when intelligent compression fails
+    fn fallback_trim_conversation_history(&mut self, max_messages: usize) {
         if self.conversation_history.len() <= max_messages {
             return;
         }
@@ -474,7 +553,7 @@ impl AgentCore {
     }
 
     /// Continue conversation with a new task without clearing history
-    pub async fn continue_conversation(
+    pub async fn execute_task_with_context(
         &mut self,
         task: &str,
         project_path: &Path,
@@ -485,7 +564,8 @@ impl AgentCore {
         if self.execution_context.is_none() {
             self.execution_context = Some(AgentExecutionContext {
                 agent_id: "coro_agent".to_string(),
-                task: task.to_string(),
+                original_goal: task.to_string(),
+                current_task: task.to_string(),
                 project_path: project_path.to_string_lossy().to_string(),
                 max_steps: self.config.max_steps,
                 current_step: 0,
@@ -493,9 +573,9 @@ impl AgentCore {
                 token_usage: TokenUsage::default(),
             });
         } else {
-            // Update the task in existing context
+            // Update only the current task, preserving the original goal
             if let Some(context) = &mut self.execution_context {
-                context.task = task.to_string();
+                context.current_task = task.to_string();
                 context.current_step = 0;
             }
         }
@@ -531,9 +611,6 @@ impl AgentCore {
                 .push(LlmMessage::system(self.get_system_prompt(project_path)));
         }
 
-        // Trim conversation history to prevent token overflow (keep last 50 messages)
-        self.trim_conversation_history(50);
-
         // Add user message with task
         let user_message = build_user_message(task);
         self.conversation_history
@@ -546,173 +623,8 @@ impl AgentCore {
         while step < self.config.max_steps && !task_completed {
             step += 1;
 
-            match self.execute_step(step, project_path).await {
-                Ok(completed) => {
-                    task_completed = completed;
-
-                    // Record step completion
-                    if let Some(recorder) = &self.trajectory_recorder {
-                        recorder
-                            .record(TrajectoryEntry::step_complete(
-                                format!("Step {} completed", step),
-                                true,
-                                step,
-                            ))
-                            .await?;
-                    }
-                }
-                Err(e) => {
-                    // Record error
-                    if let Some(recorder) = &self.trajectory_recorder {
-                        recorder
-                            .record(TrajectoryEntry::error(
-                                e.to_string(),
-                                Some(format!("Step {}", step)),
-                                step,
-                            ))
-                            .await?;
-                    }
-
-                    let duration = start_time.elapsed().as_millis() as u64;
-                    return Ok(AgentExecution::failure(
-                        format!("Error in step {}: {}", step, e),
-                        step,
-                        duration,
-                    ));
-                }
-            }
-        }
-
-        let duration = start_time.elapsed();
-
-        // Update execution context
-        if let Some(context) = &mut self.execution_context {
-            context.current_step = step;
-            context.execution_time = duration;
-        }
-
-        // Record task completion
-        if let Some(recorder) = &self.trajectory_recorder {
-            recorder
-                .record(TrajectoryEntry::task_complete(
-                    task_completed,
-                    if task_completed {
-                        "Task completed successfully".to_string()
-                    } else {
-                        format!("Task incomplete after {} steps", step)
-                    },
-                    step,
-                    duration.as_millis() as u64,
-                ))
-                .await?;
-        }
-
-        // Emit execution completed event
-        if let Some(context) = &self.execution_context {
-            let summary = if task_completed {
-                "Task completed successfully".to_string()
-            } else {
-                format!("Task incomplete after {} steps", step)
-            };
-
-            self.output
-                .emit_event(AgentEvent::ExecutionCompleted {
-                    context: context.clone(),
-                    success: task_completed,
-                    summary: summary.clone(),
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    let _ = futures::executor::block_on(
-                        self.output
-                            .debug(&format!("Failed to emit execution completed event: {}", e)),
-                    );
-                });
-        }
-
-        let duration_ms = duration.as_millis() as u64;
-
-        if task_completed {
-            Ok(AgentExecution::success(
-                "Task completed successfully".to_string(),
-                step,
-                duration_ms,
-            ))
-        } else {
-            Ok(AgentExecution::failure(
-                format!("Task incomplete after {} steps", step),
-                step,
-                duration_ms,
-            ))
-        }
-    }
-
-    /// Execute a task with project context (like Python version)
-    pub async fn execute_task_with_context(
-        &mut self,
-        task: &str,
-        project_path: &Path,
-    ) -> AgentResult<AgentExecution> {
-        let start_time = Instant::now();
-
-        // Initialize conversation with system prompt and user message with context
-        self.conversation_history.clear();
-        // Reset task display flag when starting a new conversation
-        self.current_task_displayed = false;
-
-        // Create execution context
-        self.execution_context = Some(AgentExecutionContext {
-            agent_id: "coro_agent".to_string(),
-            task: task.to_string(),
-            project_path: project_path.to_string_lossy().to_string(),
-            max_steps: self.config.max_steps,
-            current_step: 0,
-            execution_time: std::time::Duration::from_secs(0),
-            token_usage: TokenUsage::default(),
-        });
-
-        // Emit execution started event
-        if let Some(context) = &self.execution_context {
-            self.output
-                .emit_event(AgentEvent::ExecutionStarted {
-                    context: context.clone(),
-                })
-                .await
-                .unwrap_or_else(|e| {
-                    let _ = futures::executor::block_on(
-                        self.output
-                            .debug(&format!("Failed to emit execution started event: {}", e)),
-                    );
-                });
-        }
-
-        self.current_task_displayed = true;
-
-        // Record task start
-        if let Some(recorder) = &self.trajectory_recorder {
-            recorder
-                .record(TrajectoryEntry::task_start(
-                    task.to_string(),
-                    serde_json::to_value(&self.config).unwrap_or_default(),
-                ))
-                .await?;
-        }
-
-        // Add system prompt with tool information and environment context
-        self.conversation_history
-            .push(LlmMessage::system(self.get_system_prompt(project_path)));
-
-        // Add user message with task only (environment context is now in system prompt)
-        let user_message = build_user_message(task);
-        self.conversation_history
-            .push(LlmMessage::user(&user_message));
-
-        let mut step = 0;
-        let mut task_completed = false;
-
-        // Execute steps until completion or max steps reached
-        while step < self.config.max_steps && !task_completed {
-            step += 1;
+            // Apply intelligent compression before each step to manage token usage
+            self.apply_intelligent_compression().await?;
 
             match self.execute_step(step, project_path).await {
                 Ok(completed) => {
@@ -925,6 +837,12 @@ mod tests {
         let tool_registry = ToolRegistry::default();
         let tool_executor = tool_registry.create_executor(&agent_config.tools);
 
+        // Create unified conversation manager for testing
+        let conversation_manager = ConversationManager::new(
+            8192, // max_tokens
+            std::sync::Arc::new(MockLlmClient::new()),
+        );
+
         let agent = AgentCore {
             config: agent_config,
             llm_client: std::sync::Arc::new(MockLlmClient::new()),
@@ -934,6 +852,7 @@ mod tests {
             output: Box::new(NullOutput),
             current_task_displayed: false,
             execution_context: None,
+            conversation_manager,
         };
 
         let project_path = PathBuf::from("/some/project/path");
