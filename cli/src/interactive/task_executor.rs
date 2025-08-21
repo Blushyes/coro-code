@@ -162,20 +162,13 @@ pub async fn execute_agent_task_with_context(
         Ok(())
     };
 
-    // Add timeout to prevent hanging
-    let timeout_future = tokio::time::sleep(tokio::time::Duration::from_secs(300)); // 5 minutes timeout
-
-    // Race between task execution, interruption, and timeout
+    // Race between task execution and interruption
     tokio::select! {
         result = task_future => {
             result?;
         }
         interrupt_result = interrupt_future => {
             interrupt_result?;
-        }
-        _ = timeout_future => {
-            tracing::error!("Task execution timed out after 5 minutes");
-            return Err(anyhow::anyhow!("Task execution timed out"));
         }
     }
 
