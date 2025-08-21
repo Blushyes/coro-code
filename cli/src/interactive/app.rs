@@ -14,7 +14,8 @@ use coro_core::ResolvedLlmConfig;
 use iocraft::prelude::*;
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use tokio::sync::broadcast;
+use std::sync::Arc;
+use tokio::sync::{broadcast, Mutex};
 
 /// Represents a file reference found in user input
 #[derive(Debug, Clone)]
@@ -269,14 +270,15 @@ pub fn submit_task_with_file_processing(
     llm_config: ResolvedLlmConfig,
     project_path: PathBuf,
     ui_sender: broadcast::Sender<AppMessage>,
+    agent: Arc<Mutex<Option<coro_core::agent::AgentCore>>>,
 ) {
-    use crate::interactive::components::input_section::spawn_ui_agent_task;
     use crate::interactive::message_handler::get_random_status_word;
 
     // Process file references asynchronously and send combined message
     let ui_sender_clone = ui_sender.clone();
     let llm_config_clone = llm_config.clone();
     let project_path_clone = project_path.clone();
+    let agent_clone = agent.clone();
 
     tokio::spawn(async move {
         let input_clone = input.clone();
@@ -297,12 +299,13 @@ pub fn submit_task_with_file_processing(
                     operation: get_random_status_word(),
                 });
 
-                // Use the existing spawn_ui_agent_task with enhanced input
-                spawn_ui_agent_task(
+                // Use the enhanced spawn_ui_agent_task_with_context with enhanced input
+                crate::interactive::components::input_section::spawn_ui_agent_task_with_context(
                     enhanced_input,
                     llm_config_clone,
                     project_path_clone,
                     ui_sender_clone,
+                    agent_clone.clone(),
                 );
             }
             Err(e) => {
@@ -317,11 +320,12 @@ pub fn submit_task_with_file_processing(
                 });
 
                 // Fall back to original input
-                spawn_ui_agent_task(
+                crate::interactive::components::input_section::spawn_ui_agent_task_with_context(
                     input_clone,
                     llm_config_clone,
                     project_path_clone,
                     ui_sender_clone,
+                    agent_clone,
                 );
             }
         }
@@ -329,13 +333,15 @@ pub fn submit_task_with_file_processing(
 }
 
 /// Context for interactive mode - immutable application configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct AppContext {
     llm_config: ResolvedLlmConfig,
     project_path: PathBuf,
     ui_sender: broadcast::Sender<AppMessage>,
     ui_anim: UiAnimationConfig,
     debug_model: bool,
+    // Persistent agent instance for conversation continuity
+    agent: Arc<Mutex<Option<coro_core::agent::AgentCore>>>,
 }
 
 impl AppContext {
@@ -353,6 +359,7 @@ impl AppContext {
             ui_sender,
             ui_anim,
             debug_model,
+            agent: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -542,6 +549,7 @@ fn CoroApp(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         llm_config: app_context.llm_config.clone(),
         project_path: app_context.project_path.clone(),
         ui_sender: app_context.ui_sender.clone(),
+        agent: app_context.agent.clone(),
     };
 
     // Create router configuration with main page using new API

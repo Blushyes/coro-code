@@ -31,6 +31,7 @@ impl Default for MainPageProps {
                 ),
                 project_path: std::path::PathBuf::from("."),
                 ui_sender: tokio::sync::broadcast::channel(1).0,
+                agent: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
             },
         }
     }

@@ -440,6 +440,213 @@ impl Agent for AgentCore {
 }
 
 impl AgentCore {
+    /// Trim conversation history to prevent token overflow
+    /// Keeps the system prompt and recent messages, removes older conversation
+    /// TODO
+    fn trim_conversation_history(&mut self, max_messages: usize) {
+        if self.conversation_history.len() <= max_messages {
+            return;
+        }
+
+        // Always keep the system prompt (first message)
+        let mut new_history = Vec::new();
+        if let Some(first_msg) = self.conversation_history.first() {
+            if matches!(first_msg.role, crate::llm::MessageRole::System) {
+                new_history.push(first_msg.clone());
+            }
+        }
+
+        // Keep the most recent messages
+        let keep_count = max_messages.saturating_sub(1); // -1 for system prompt
+        let start_index = self.conversation_history.len().saturating_sub(keep_count);
+
+        // Skip system prompt if it's already added
+        let skip_first = !new_history.is_empty();
+        let iter_start = if skip_first {
+            std::cmp::max(1, start_index)
+        } else {
+            start_index
+        };
+
+        new_history.extend(self.conversation_history[iter_start..].iter().cloned());
+
+        self.conversation_history = new_history;
+    }
+
+    /// Continue conversation with a new task without clearing history
+    pub async fn continue_conversation(
+        &mut self,
+        task: &str,
+        project_path: &Path,
+    ) -> AgentResult<AgentExecution> {
+        let start_time = Instant::now();
+
+        // Create execution context or update existing one
+        if self.execution_context.is_none() {
+            self.execution_context = Some(AgentExecutionContext {
+                agent_id: "coro_agent".to_string(),
+                task: task.to_string(),
+                project_path: project_path.to_string_lossy().to_string(),
+                max_steps: self.config.max_steps,
+                current_step: 0,
+                execution_time: std::time::Duration::from_secs(0),
+                token_usage: TokenUsage::default(),
+            });
+        } else {
+            // Update the task in existing context
+            if let Some(context) = &mut self.execution_context {
+                context.task = task.to_string();
+                context.current_step = 0;
+            }
+        }
+
+        // Emit execution started event
+        if let Some(context) = &self.execution_context {
+            self.output
+                .emit_event(AgentEvent::ExecutionStarted {
+                    context: context.clone(),
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    let _ = futures::executor::block_on(
+                        self.output
+                            .debug(&format!("Failed to emit execution started event: {}", e)),
+                    );
+                });
+        }
+
+        // Record task start
+        if let Some(recorder) = &self.trajectory_recorder {
+            recorder
+                .record(TrajectoryEntry::task_start(
+                    task.to_string(),
+                    serde_json::to_value(&self.config).unwrap_or_default(),
+                ))
+                .await?;
+        }
+
+        // If conversation history is empty, add system prompt
+        if self.conversation_history.is_empty() {
+            self.conversation_history
+                .push(LlmMessage::system(self.get_system_prompt(project_path)));
+        }
+
+        // Trim conversation history to prevent token overflow (keep last 50 messages)
+        self.trim_conversation_history(50);
+
+        // Add user message with task
+        let user_message = build_user_message(task);
+        self.conversation_history
+            .push(LlmMessage::user(&user_message));
+
+        let mut step = 0;
+        let mut task_completed = false;
+
+        // Execute steps until completion or max steps reached
+        while step < self.config.max_steps && !task_completed {
+            step += 1;
+
+            match self.execute_step(step, project_path).await {
+                Ok(completed) => {
+                    task_completed = completed;
+
+                    // Record step completion
+                    if let Some(recorder) = &self.trajectory_recorder {
+                        recorder
+                            .record(TrajectoryEntry::step_complete(
+                                format!("Step {} completed", step),
+                                true,
+                                step,
+                            ))
+                            .await?;
+                    }
+                }
+                Err(e) => {
+                    // Record error
+                    if let Some(recorder) = &self.trajectory_recorder {
+                        recorder
+                            .record(TrajectoryEntry::error(
+                                e.to_string(),
+                                Some(format!("Step {}", step)),
+                                step,
+                            ))
+                            .await?;
+                    }
+
+                    let duration = start_time.elapsed().as_millis() as u64;
+                    return Ok(AgentExecution::failure(
+                        format!("Error in step {}: {}", step, e),
+                        step,
+                        duration,
+                    ));
+                }
+            }
+        }
+
+        let duration = start_time.elapsed();
+
+        // Update execution context
+        if let Some(context) = &mut self.execution_context {
+            context.current_step = step;
+            context.execution_time = duration;
+        }
+
+        // Record task completion
+        if let Some(recorder) = &self.trajectory_recorder {
+            recorder
+                .record(TrajectoryEntry::task_complete(
+                    task_completed,
+                    if task_completed {
+                        "Task completed successfully".to_string()
+                    } else {
+                        format!("Task incomplete after {} steps", step)
+                    },
+                    step,
+                    duration.as_millis() as u64,
+                ))
+                .await?;
+        }
+
+        // Emit execution completed event
+        if let Some(context) = &self.execution_context {
+            let summary = if task_completed {
+                "Task completed successfully".to_string()
+            } else {
+                format!("Task incomplete after {} steps", step)
+            };
+
+            self.output
+                .emit_event(AgentEvent::ExecutionCompleted {
+                    context: context.clone(),
+                    success: task_completed,
+                    summary: summary.clone(),
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    let _ = futures::executor::block_on(
+                        self.output
+                            .debug(&format!("Failed to emit execution completed event: {}", e)),
+                    );
+                });
+        }
+
+        let duration_ms = duration.as_millis() as u64;
+
+        if task_completed {
+            Ok(AgentExecution::success(
+                "Task completed successfully".to_string(),
+                step,
+                duration_ms,
+            ))
+        } else {
+            Ok(AgentExecution::failure(
+                format!("Task incomplete after {} steps", step),
+                step,
+                duration_ms,
+            ))
+        }
+    }
+
     /// Execute a task with project context (like Python version)
     pub async fn execute_task_with_context(
         &mut self,

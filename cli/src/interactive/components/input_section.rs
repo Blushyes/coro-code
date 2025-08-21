@@ -16,8 +16,9 @@ use coro_core::ResolvedLlmConfig;
 use iocraft::prelude::*;
 use std::cmp::min;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use unicode_width::UnicodeWidthStr;
 
 /// Find the nearest character boundary at or before the given byte position
@@ -117,17 +118,19 @@ impl Default for InputSectionProps {
                 ),
                 project_path: PathBuf::new(),
                 ui_sender: tokio::sync::broadcast::channel(1).0,
+                agent: Arc::new(Mutex::new(None)),
             },
         }
     }
 }
 
 /// Context for the input section component
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct InputSectionContext {
     pub llm_config: ResolvedLlmConfig,
     pub project_path: PathBuf,
     pub ui_sender: broadcast::Sender<AppMessage>,
+    pub agent: Arc<Mutex<Option<coro_core::agent::AgentCore>>>,
 }
 
 /// Enhanced text input component that wraps iocraft's TextInput with submit handling
@@ -912,6 +915,69 @@ pub fn spawn_ui_agent_task(
     });
 }
 
+/// Spawn agent task execution with persistent agent for conversation continuity
+pub fn spawn_ui_agent_task_with_context(
+    input: String,
+    llm_config: ResolvedLlmConfig,
+    project_path: PathBuf,
+    ui_sender: broadcast::Sender<AppMessage>,
+    agent: Arc<Mutex<Option<coro_core::agent::AgentCore>>>,
+) {
+    use crate::interactive::message_handler::get_random_status_word;
+    use crate::interactive::task_executor::execute_agent_task_with_context;
+
+    // Start with a random status word
+    let _ = ui_sender.send(AppMessage::AgentTaskStarted {
+        operation: get_random_status_word(),
+    });
+
+    // Create a cancellation token for the timer
+    let (cancel_sender, mut cancel_receiver) = tokio::sync::oneshot::channel::<()>();
+
+    // Change status word once after 1 second (unless cancelled)
+    let ui_sender_timer = ui_sender.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(1)) => {
+                let _ = ui_sender_timer.send(AppMessage::AgentTaskStarted {
+                    operation: get_random_status_word(),
+                });
+            }
+            _ = &mut cancel_receiver => {
+                // Timer cancelled, do nothing
+            }
+        }
+    });
+
+    // Execute agent task with persistent context
+    tokio::spawn(async move {
+        match execute_agent_task_with_context(
+            input,
+            llm_config,
+            project_path,
+            ui_sender.clone(),
+            agent,
+        )
+        .await
+        {
+            Ok(_) => {
+                let _ = cancel_sender.send(()); // Cancel the timer
+                let _ = ui_sender.send(AppMessage::AgentExecutionCompleted);
+            }
+            Err(e) => {
+                let _ = cancel_sender.send(()); // Cancel the timer
+                                                // Check if it's an interruption error
+                if e.to_string().contains("Task interrupted by user") {
+                    // Don't show error message for user interruptions
+                } else {
+                    let _ = ui_sender.send(AppMessage::SystemMessage(format!("Error: {}", e)));
+                }
+                let _ = ui_sender.send(AppMessage::AgentExecutionCompleted);
+            }
+        }
+    });
+}
+
 /// Input Section Component - Fixed bottom area for input and status
 #[component]
 pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<AnyElement<'static>> {
@@ -1105,6 +1171,7 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                     let ui_sender = ui_sender.clone();
                     let llm_config = llm_config.clone();
                     let project_path = project_path.clone();
+                    let agent = context.agent.clone();
                     move |input: String| {
                         if input.trim().is_empty() {
                             return;
@@ -1137,6 +1204,7 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                             llm_config.clone(),
                             project_path.clone(),
                             ui_sender.clone(),
+                            agent.clone(),
                         );
                     }
                 },
