@@ -128,14 +128,7 @@ impl ConversationManager {
         };
 
         match compression_level {
-            Some((level, reason)) => {
-                tracing::info!(
-                    "Applying {} compression: {:.1}% token usage ({})",
-                    level.as_str(),
-                    usage_ratio * 100.0,
-                    reason
-                );
-
+            Some((level, _reason)) => {
                 let target_tokens =
                     (self.max_tokens as f64 * self.get_compression_target(level)) as u32;
                 let messages_before_count = messages.len() as u32;
@@ -168,8 +161,6 @@ impl ConversationManager {
                         }
                     ),
                 };
-
-                tracing::info!("{}", summary.summary);
 
                 // Update current token count
                 self.current_tokens = tokens_after;
@@ -229,8 +220,6 @@ impl ConversationManager {
     }
 
     async fn light_compression(&self, mut messages: Vec<LlmMessage>) -> Result<Vec<LlmMessage>> {
-        tracing::debug!("Applying light compression");
-
         for message in &mut messages {
             if let MessageContent::MultiModal(blocks) = &mut message.content {
                 for block in blocks {
@@ -251,8 +240,6 @@ impl ConversationManager {
         messages: Vec<LlmMessage>,
         context: Option<&AgentExecutionContext>,
     ) -> Result<Vec<LlmMessage>> {
-        tracing::debug!("Applying medium compression");
-
         if messages.is_empty() {
             return Ok(messages);
         }
@@ -297,8 +284,6 @@ impl ConversationManager {
     }
 
     async fn heavy_compression(&self, messages: Vec<LlmMessage>) -> Result<Vec<LlmMessage>> {
-        tracing::debug!("Applying heavy compression");
-
         if messages.is_empty() {
             return Ok(messages);
         }
@@ -340,14 +325,24 @@ impl ConversationManager {
         let sample_size = (self.tool_output_budget as usize / 2).min(2000);
         let half_sample = sample_size / 2;
 
+        // Safe UTF-8 character boundary slicing
         let beginning = if output.len() > half_sample {
-            &output[..half_sample]
+            let mut boundary = half_sample;
+            while boundary < output.len() && !output.is_char_boundary(boundary) {
+                boundary += 1;
+            }
+            &output[..boundary]
         } else {
             output
         };
 
         let ending = if output.len() > sample_size {
-            &output[output.len().saturating_sub(half_sample)..]
+            let start_pos = output.len().saturating_sub(half_sample);
+            let mut boundary = start_pos;
+            while boundary > 0 && !output.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            &output[boundary..]
         } else {
             ""
         };
@@ -390,8 +385,7 @@ impl ConversationManager {
                     ))
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to generate tool output summary: {}", e);
+            Err(_e) => {
                 // Fallback to truncation
                 Ok(format!(
                     "{}...[truncated {} chars]",
@@ -574,7 +568,6 @@ The structure MUST be as follows:
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to generate conversation summary: {}", e);
                 let fallback_goal = context
                     .map(|c| c.original_goal.as_str())
                     .unwrap_or("Summary generation error");
