@@ -77,7 +77,11 @@ Create a `coro.json` file:
   "base_url": "https://api.deepseek.com",
   "api_key": "your-api-key",
   "model": "deepseek-chat",
-  "max_token": 8192
+  "params": {
+    "max_tokens": 131072,
+    "temperature": 0.7,
+    "top_p": 0.9
+  }
 }
 ```
 
@@ -152,12 +156,12 @@ coro --config custom.json "Analyze this codebase"
 <details>
 <summary><strong>🤖 Phase 3: Intelligence & Performance</strong></summary>
 
-| Priority  | Status | Feature                            | Description                                                                   |
-| --------- | ------ | ---------------------------------- | ----------------------------------------------------------------------------- |
-| 🟡 Medium | 📋     | **Multi-model & Auto Routing**     | Auto model selection by task type, failure auto-downgrade & retry strategies  |
-| 🟡 Medium | 📋     | **Context Optimization & Caching** | File summary caching, duplicate reference deduplication, token budget control |
-| 🟡 Medium | ✅     | **Token Compression**               | Intelligent context compression, selective token reduction, adaptive context windows |
-| 🔵 Low    | 📋     | **MCP Extension Ecosystem**        | Common provider presets & templates, one-click start/stop external tools      |
+| Priority  | Status | Feature                            | Description                                                                          |
+| --------- | ------ | ---------------------------------- | ------------------------------------------------------------------------------------ |
+| 🟡 Medium | 📋     | **Multi-model & Auto Routing**     | Auto model selection by task type, failure auto-downgrade & retry strategies         |
+| 🟡 Medium | 📋     | **Context Optimization & Caching** | File summary caching, duplicate reference deduplication, token budget control        |
+| 🟡 Medium | ✅     | **Token Compression**              | Intelligent context compression, selective token reduction, adaptive context windows |
+| 🔵 Low    | 📋     | **MCP Extension Ecosystem**        | Common provider presets & templates, one-click start/stop external tools             |
 
 </details>
 
