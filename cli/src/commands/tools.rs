@@ -25,7 +25,7 @@ pub async fn tools_command() -> Result<()> {
 
     println!("💡 Use these tools in your tasks to accomplish complex workflows!");
     println!(
-        "📋 All tools follow the exact same specifications as the Python version of Trae Agent."
+        "📋 All tools follow the exact same specifications as the Python version of Coro Code."
     );
 
     Ok(())

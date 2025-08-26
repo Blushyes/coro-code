@@ -1,4 +1,4 @@
-//! Output abstraction layer for the Trae Agent core
+//! Output abstraction layer for the Coro Code core
 //!
 //! This module provides an abstract interface for outputting agent execution information,
 //! allowing different implementations for CLI, API, logging, etc.

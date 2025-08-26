@@ -1,11 +1,11 @@
-//! Error types and handling for Trae Agent Core
+//! Error types and handling for Coro Code Core
 
 use thiserror::Error;
 
-/// Result type alias for Trae Agent operations
+/// Result type alias for Coro Code operations
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Main error type for Trae Agent Core
+/// Main error type for Coro Code Core
 #[derive(Error, Debug)]
 pub enum Error {
     /// Configuration-related errors

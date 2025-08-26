@@ -11,7 +11,7 @@ pub use base::{Agent, AgentResult};
 pub use config::{AgentBuilder, AgentConfig, OutputMode};
 pub use core::AgentCore;
 pub use execution::AgentExecution;
-pub use prompt::{build_system_prompt_with_context, build_user_message, TRAE_AGENT_SYSTEM_PROMPT};
+pub use prompt::{build_system_prompt_with_context, build_user_message, CORO_CODE_SYSTEM_PROMPT};
 pub use tokens::{
     CompressionLevel, CompressionSummary, ConversationManager, ConversationTokenStats,
     MaybeCompressedResult, TokenCalculator,

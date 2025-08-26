@@ -1,7 +1,7 @@
 //! Agent system prompts
 
-/// Trae Agent system prompt (consistent with Python version)
-pub const TRAE_AGENT_SYSTEM_PROMPT: &str = r#"You are an expert AI software engineering agent.
+/// Coro Code system prompt (consistent with Python version)
+pub const CORO_CODE_SYSTEM_PROMPT: &str = r#"You are an expert AI software engineering agent.
 
 File Path Rule: All tools that take a `file_path` as an argument require an **absolute path**. You MUST construct the full, absolute path by combining the `[Project root path]` provided in the user's message with the file's path inside the project.
 
@@ -49,7 +49,7 @@ Follow these steps methodically:
 - The sequential_thinking tool can help you break down complex problems, analyze issues step-by-step, and ensure a thorough approach to problem-solving.
 - Don't hesitate to use it multiple times throughout your thought process to enhance the depth and accuracy of your solutions.
 
-If you are sure the issue has been solved, you should call the `task_done` to finish the task.
+If you are sure the issue has been solved, or you have already finished answering the user’s question, you should call the `task_done` to finish the task.
 "#;
 
 /// Build system context information
@@ -83,7 +83,7 @@ pub fn build_system_prompt_with_context(project_path: &std::path::Path) -> Strin
          Construct absolute paths by combining the project root path above with relative file paths.\n\
          Example: If you want to edit 'src/main.rs', use '{}/src/main.rs'\n\n\
          [System Context]:\n{}",
-        TRAE_AGENT_SYSTEM_PROMPT,
+        CORO_CODE_SYSTEM_PROMPT,
         project_path_str,
         project_path_str,
         system_context

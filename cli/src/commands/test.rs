@@ -7,7 +7,7 @@ use tracing::info;
 pub async fn test_command() -> Result<()> {
     info!("Testing basic functionality");
 
-    println!("🧪 Running Trae Agent Tests");
+    println!("🧪 Running Coro Code Tests");
 
     // Test 1: Configuration loading
     println!("📋 Test 1: Configuration system");
