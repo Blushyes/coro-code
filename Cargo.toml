@@ -3,7 +3,7 @@ members = ["core", "cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2021"
 authors = ["Blushyes"]
 license = "MIT OR Apache-2.0"

@@ -116,6 +116,11 @@ pub enum AgentEvent {
         success: bool,
         summary: String,
     },
+    /// Agent execution interrupted (cancelled)
+    ExecutionInterrupted {
+        context: AgentExecutionContext,
+        reason: String,
+    },
     /// New step started
     StepStarted { step_info: AgentStepInfo },
     /// Step completed

@@ -36,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create agent with custom system prompt
     let mut agent =
-        AgentCore::new_with_llm_config(agent_config, llm_config, Box::new(NullOutput)).await?;
+        AgentCore::new_with_llm_config(agent_config, llm_config, Box::new(NullOutput), None)
+            .await?;
 
     // Verify the system prompt is set
     if let Some(prompt) = agent.get_configured_system_prompt() {

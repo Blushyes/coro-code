@@ -16,3 +16,6 @@ pub use tokens::{
     CompressionLevel, CompressionSummary, ConversationManager, ConversationTokenStats,
     MaybeCompressedResult, TokenCalculator,
 };
+
+pub mod abort;
+pub use abort::{AbortController, AbortRegistration};

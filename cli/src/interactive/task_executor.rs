@@ -135,6 +135,7 @@ pub async fn execute_agent_task_with_context(
             llm_config,
             token_tracking_output,
             tool_registry,
+            None,
         )
         .await?;
 
@@ -147,11 +148,15 @@ pub async fn execute_agent_task_with_context(
     // Execute task with conversation continuation
     let task_future = agent_ref.execute_task_with_context(&task, &project_path);
 
-    // Listen for interruption signals
-    let interrupt_future = async {
+    // Listen for interruption signals - cancel the persistent agent when triggered
+    let agent_for_cancel = agent.clone();
+    let interrupt_future = async move {
         loop {
             match interrupt_receiver.recv().await {
                 Ok(AppMessage::AgentExecutionInterrupted { .. }) => {
+                    if let Some(a) = agent_for_cancel.lock().await.as_ref() {
+                        a.cancel();
+                    }
                     tracing::warn!("Task interrupted by user");
                     return Err(anyhow::anyhow!("Task interrupted by user"));
                 }
@@ -223,23 +228,29 @@ pub async fn execute_agent_task(
         ui_sender.clone(),
     )));
 
+    // Create an AbortController for this single-run agent
+    let (abort_controller, _reg) = coro_core::agent::AbortController::new();
+
     // Create and execute agent task
     let mut agent = coro_core::agent::AgentCore::new_with_output_and_registry(
         agent_config,
         llm_config,
         token_tracking_output,
         tool_registry,
+        Some(abort_controller.clone()),
     )
     .await?;
 
     // Execute task with interruption support
     let task_future = agent.execute_task_with_context(&task, &project_path);
 
-    // Listen for interruption signals
-    let interrupt_future = async {
+    // Listen for interruption signals - cancel via AbortController when triggered
+    let abort_controller_for_cancel = abort_controller.clone();
+    let interrupt_future = async move {
         loop {
             match interrupt_receiver.recv().await {
                 Ok(AppMessage::AgentExecutionInterrupted { .. }) => {
+                    abort_controller_for_cancel.cancel();
                     tracing::warn!("Task interrupted by user");
                     return Err(anyhow::anyhow!("Task interrupted by user"));
                 }

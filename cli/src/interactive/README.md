@@ -165,6 +165,26 @@ Manages agent task execution with UI integration and token tracking.
 
 ### `terminal_output.rs` - Terminal Output Abstraction
 
+#### Cancellation (Interrupt)
+
+- UI sends `AppMessage::AgentExecutionInterrupted` (e.g., on Ctrl+C)
+- Task executor forwards this to core by calling the agent's global AbortController
+- Core emits `AgentEvent::ExecutionInterrupted { context, reason }` and stops gracefully
+
+Programmatic example (non-UI):
+
+```rust
+let (abort_controller, _reg) = coro_core::agent::AbortController::new();
+let mut agent = coro_core::agent::AgentCore::new_with_llm_config(
+    agent_config,
+    llm_config,
+    Box::new(coro_core::output::events::NullOutput),
+    Some(abort_controller.clone()),
+).await?;
+// In another task/thread:
+abort_controller.cancel();
+```
+
 Provides terminal output utilities and formatting functions that work with the AgentOutput system.
 
 **Key Traits:**

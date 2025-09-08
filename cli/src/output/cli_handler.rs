@@ -103,6 +103,15 @@ impl AgentOutput for CliOutputHandler {
                 }
             }
 
+            AgentEvent::ExecutionInterrupted { context, reason } => {
+                warn!("Task interrupted: {}", reason);
+                debug!(
+                    "Interrupted after {} steps, duration: {:.2}s",
+                    context.current_step,
+                    context.execution_time.as_secs_f64()
+                );
+            }
+
             AgentEvent::StepStarted { step_info } => {
                 debug!("Step {}: {}", step_info.step_number, step_info.task);
             }

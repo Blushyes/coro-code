@@ -29,6 +29,8 @@ pub struct AgentCore {
     current_task_displayed: bool,
     execution_context: Option<AgentExecutionContext>,
     conversation_manager: ConversationManager,
+    // Global cancellation controller injected at creation
+    abort_controller: crate::agent::AbortController,
 }
 
 impl AgentCore {
@@ -37,6 +39,7 @@ impl AgentCore {
         agent_config: AgentConfig,
         llm_config: crate::config::ResolvedLlmConfig,
         output: Box<dyn AgentOutput>,
+        abort_controller: Option<crate::agent::AbortController>,
     ) -> Result<Self> {
         // Create LLM client based on protocol
         let llm_client: Arc<dyn LlmClient> = match llm_config.protocol {
@@ -66,6 +69,9 @@ impl AgentCore {
         let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
         let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
 
+        // Configure cancellation controller
+        let ac = abort_controller.unwrap_or_else(|| crate::agent::AbortController::new().0);
+
         Ok(Self {
             config: agent_config,
             llm_client,
@@ -76,6 +82,7 @@ impl AgentCore {
             current_task_displayed: false,
             execution_context: None,
             conversation_manager,
+            abort_controller: ac,
         })
     }
 
@@ -84,12 +91,18 @@ impl AgentCore {
         &self.config
     }
 
+    /// Request cancellation on this agent
+    pub fn cancel(&self) {
+        self.abort_controller.cancel();
+    }
+
     /// Create a new TraeAgent with custom tool registry and output handler
     pub async fn new_with_output_and_registry(
         agent_config: AgentConfig,
         llm_config: crate::config::ResolvedLlmConfig,
         output: Box<dyn AgentOutput>,
         tool_registry: ToolRegistry,
+        abort_controller: Option<crate::agent::AbortController>,
     ) -> Result<Self> {
         // Create LLM client based on protocol
         let llm_client: Arc<dyn LlmClient> = match llm_config.protocol {
@@ -118,6 +131,9 @@ impl AgentCore {
         let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
         let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
 
+        // Configure cancellation controller
+        let ac = abort_controller.unwrap_or_else(|| crate::agent::AbortController::new().0);
+
         Ok(Self {
             config: agent_config,
             llm_client,
@@ -128,6 +144,7 @@ impl AgentCore {
             current_task_displayed: false,
             execution_context: None,
             conversation_manager,
+            abort_controller: ac,
         })
     }
 
@@ -137,7 +154,7 @@ impl AgentCore {
         llm_config: crate::config::ResolvedLlmConfig,
     ) -> Result<Self> {
         use crate::output::events::NullOutput;
-        Self::new_with_llm_config(agent_config, llm_config, Box::new(NullOutput)).await
+        Self::new_with_llm_config(agent_config, llm_config, Box::new(NullOutput), None).await
     }
 
     /// Set a custom system prompt for the agent
@@ -619,6 +636,10 @@ impl AgentCore {
         let mut step = 0;
         let mut task_completed = false;
 
+        let mut interrupted = false;
+        // Subscribe to global cancellation
+        let mut cancel_reg = self.abort_controller.subscribe();
+
         // Execute steps until completion or max steps reached
         while step < self.config.max_steps && !task_completed {
             step += 1;
@@ -626,39 +647,49 @@ impl AgentCore {
             // Apply intelligent compression before each step to manage token usage
             self.apply_intelligent_compression().await?;
 
-            match self.execute_step(step, project_path).await {
-                Ok(completed) => {
-                    task_completed = completed;
-
-                    // Record step completion
-                    if let Some(recorder) = &self.trajectory_recorder {
-                        recorder
-                            .record(TrajectoryEntry::step_complete(
-                                format!("Step {} completed", step),
-                                true,
-                                step,
-                            ))
-                            .await?;
-                    }
+            // Race step execution with cancellation
+            tokio::select! {
+                _ = cancel_reg.cancelled() => {
+                    interrupted = true;
+                    break;
                 }
-                Err(e) => {
-                    // Record error
-                    if let Some(recorder) = &self.trajectory_recorder {
-                        recorder
-                            .record(TrajectoryEntry::error(
-                                e.to_string(),
-                                Some(format!("Step {}", step)),
-                                step,
-                            ))
-                            .await?;
-                    }
+                result = self.execute_step(step, project_path) => {
+                    match result {
+                        Ok(completed) => {
+                            task_completed = completed;
 
-                    let duration = start_time.elapsed().as_millis() as u64;
-                    return Ok(AgentExecution::failure(
-                        format!("Error in step {}: {}", step, e),
-                        step,
-                        duration,
-                    ));
+                            // Record step completion
+                            if let Some(recorder) = &self.trajectory_recorder {
+                                recorder
+                                    .record(TrajectoryEntry::step_complete(
+                                        format!("Step {} completed", step),
+                                        true,
+                                        step,
+                                    ))
+                                    .await?;
+                            }
+                        }
+                        Err(e) => {
+                            // Record error
+                            if let Some(recorder) = &self.trajectory_recorder {
+                                recorder
+                                    .record(TrajectoryEntry::error(
+                                        e.to_string(),
+                                        Some(format!("Step {}", step)),
+                                        step,
+                                    ))
+                                    .await?;
+                            }
+
+                            let duration = start_time.elapsed().as_millis() as u64;
+                            return Ok(AgentExecution::failure(
+                                format!("Error in step {}: {}", step, e),
+                                step,
+                                duration,
+                            ));
+
+                        }
+                    }
                 }
             }
         }
@@ -694,6 +725,30 @@ impl AgentCore {
             } else {
                 format!("Task incomplete after {} steps", step)
             };
+
+            // If interrupted, emit event and return immediately
+            if interrupted {
+                if let Some(context) = &self.execution_context {
+                    self.output
+                        .emit_event(AgentEvent::ExecutionInterrupted {
+                            context: context.clone(),
+                            reason: "Execution interrupted by user".to_string(),
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            let _ = futures::executor::block_on(self.output.debug(&format!(
+                                "Failed to emit execution interrupted event: {}",
+                                e
+                            )));
+                        });
+                }
+                let duration_ms = duration.as_millis() as u64;
+                return Ok(AgentExecution::failure(
+                    "Execution interrupted".to_string(),
+                    step,
+                    duration_ms,
+                ));
+            }
 
             self.output
                 .emit_event(AgentEvent::ExecutionCompleted {
@@ -843,6 +898,8 @@ mod tests {
             std::sync::Arc::new(MockLlmClient::new()),
         );
 
+        let (ac, _reg) = crate::agent::AbortController::new();
+
         let agent = AgentCore {
             config: agent_config,
             llm_client: std::sync::Arc::new(MockLlmClient::new()),
@@ -853,6 +910,7 @@ mod tests {
             current_task_displayed: false,
             execution_context: None,
             conversation_manager,
+            abort_controller: ac,
         };
 
         let project_path = PathBuf::from("/some/project/path");

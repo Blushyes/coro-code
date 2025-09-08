@@ -60,6 +60,7 @@ impl Default for AgentConfig {
 pub struct AgentBuilder {
     llm_config: crate::config::ResolvedLlmConfig,
     agent_config: AgentConfig,
+    abort_controller: Option<super::AbortController>,
 }
 
 impl AgentBuilder {
@@ -68,6 +69,7 @@ impl AgentBuilder {
         Self {
             llm_config,
             agent_config: AgentConfig::default(),
+            abort_controller: None,
         }
     }
 
@@ -101,12 +103,24 @@ impl AgentBuilder {
         self
     }
 
+    /// Inject a global AbortController for cancellation support
+    pub fn with_cancellation(mut self, controller: super::AbortController) -> Self {
+        self.abort_controller = Some(controller);
+        self
+    }
+
     /// Build the agent with the given output handler
     pub async fn build_with_output(
         self,
         output: Box<dyn crate::output::AgentOutput>,
     ) -> crate::error::Result<super::AgentCore> {
-        super::AgentCore::new_with_llm_config(self.agent_config, self.llm_config, output).await
+        super::AgentCore::new_with_llm_config(
+            self.agent_config,
+            self.llm_config,
+            output,
+            self.abort_controller,
+        )
+        .await
     }
 
     /// Build the agent with custom output handler and tool registry
@@ -120,6 +134,7 @@ impl AgentBuilder {
             self.llm_config,
             output,
             tool_registry,
+            self.abort_controller,
         )
         .await
     }
