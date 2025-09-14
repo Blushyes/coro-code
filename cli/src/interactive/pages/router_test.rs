@@ -2,8 +2,8 @@
 //!
 //! This page provides a test interface for the router system with navigation options.
 
-use iocraft::prelude::*;
 use coro_router::use_router;
+use iocraft::prelude::*;
 
 /// Navigation options available on the router test page
 #[derive(Debug, Clone, Copy, PartialEq)]
