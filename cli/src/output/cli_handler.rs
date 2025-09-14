@@ -266,6 +266,40 @@ impl AgentOutput for CliOutputHandler {
         self.config.realtime_updates
     }
 
+    async fn request_confirmation(
+        &self,
+        request: &coro_core::output::ConfirmationRequest,
+    ) -> Result<coro_core::output::ConfirmationDecision, Box<dyn std::error::Error + Send + Sync>>
+    {
+        use std::io::{stdin, stdout, Write};
+
+        // Show concise prompt in normal mode
+        println!("{}", request.title);
+        if !request.message.is_empty() {
+            println!("{}", request.message);
+        }
+
+        if let Some(params) = request.metadata.get("parameters") {
+            if let Ok(mut preview) = serde_json::to_string(params) {
+                if preview.len() > 200 {
+                    preview.truncate(200);
+                    preview.push_str("...");
+                }
+                println!("Parameters: {}", preview);
+            }
+        }
+
+        print!("Confirm? [y/N]: ");
+        stdout().flush()?;
+        let mut line = String::new();
+        stdin().read_line(&mut line)?;
+        let approved = matches!(line.trim(), "y" | "Y");
+        Ok(coro_core::output::ConfirmationDecision {
+            approved,
+            note: None,
+        })
+    }
+
     async fn flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use std::io::Write;
         std::io::stdout().flush().map_err(|e| e.into())

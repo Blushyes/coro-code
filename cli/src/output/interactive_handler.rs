@@ -268,6 +268,15 @@ impl AgentOutput for InteractiveOutputHandler {
         self.cli_handler.supports_realtime_updates()
     }
 
+    async fn request_confirmation(
+        &self,
+        request: &coro_core::output::ConfirmationRequest,
+    ) -> Result<coro_core::output::ConfirmationDecision, Box<dyn std::error::Error + Send + Sync>>
+    {
+        // Delegate to CLI output handler (interactive UI can customize later)
+        coro_core::output::AgentOutput::request_confirmation(&self.cli_handler, request).await
+    }
+
     async fn flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Delegate to CLI output handler
         self.cli_handler.flush().await

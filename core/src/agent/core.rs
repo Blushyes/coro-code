@@ -222,9 +222,6 @@ impl AgentCore {
         // Get tool definitions
         let tool_definitions = self.tool_executor.get_tool_definitions();
 
-        // Log agent thinking in debug mode
-        let _ = self.output.debug("🤖 Agent thinking...").await;
-
         // Set up options
         let options = Some(ChatOptions {
             ..Default::default()
@@ -322,8 +319,53 @@ impl AgentCore {
                             .await?;
                     }
 
-                    // Execute tool
-                    let tool_result = self.tool_executor.execute(tool_call.clone()).await?;
+                    // Confirm (if required) and execute tool
+                    let needs_confirm = self
+                        .tool_executor
+                        .get_tool(name)
+                        .map(|t| t.requires_confirmation())
+                        .unwrap_or(false);
+
+                    let tool_result = if needs_confirm {
+                        // Build a generic confirmation request
+                        let mut meta = std::collections::HashMap::new();
+                        meta.insert(
+                            "tool_name".to_string(),
+                            serde_json::Value::String(name.clone()),
+                        );
+                        meta.insert("parameters".to_string(), input.clone());
+                        meta.insert(
+                            "tool_call_id".to_string(),
+                            serde_json::Value::String(id.clone()),
+                        );
+
+                        let request = crate::output::ConfirmationRequest {
+                            id: id.clone(),
+                            kind: crate::output::ConfirmationKind::ToolExecution,
+                            title: format!("Execute tool: {}", name),
+                            message: "This tool requires confirmation before execution."
+                                .to_string(),
+                            metadata: meta,
+                        };
+
+                        let decision = self.output.request_confirmation(&request).await.unwrap_or(
+                            crate::output::ConfirmationDecision {
+                                approved: false,
+                                note: Some("Failed to obtain confirmation".to_string()),
+                            },
+                        );
+
+                        if !decision.approved {
+                            crate::tools::ToolResult::error(
+                                id.clone(),
+                                "Execution cancelled by user".to_string(),
+                            )
+                        } else {
+                            self.tool_executor.execute(tool_call.clone()).await?
+                        }
+                    } else {
+                        self.tool_executor.execute(tool_call.clone()).await?
+                    };
 
                     // Create completed tool execution info and emit completed event
                     let completed_tool_info = ToolExecutionInfo::create_tool_execution_info(

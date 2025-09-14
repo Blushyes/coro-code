@@ -39,6 +39,37 @@ pub enum ToolExecutionStatus {
     Error,
 }
 
+/// Confirmation kinds for interactive/safe operations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConfirmationKind {
+    /// Confirm before executing a tool
+    ToolExecution,
+}
+
+/// A generic confirmation request that UI/API layers can handle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfirmationRequest {
+    /// Request identifier (can reuse related entity id)
+    pub id: String,
+    /// The kind of confirmation
+    pub kind: ConfirmationKind,
+    /// Short title for display
+    pub title: String,
+    /// Detailed message for display
+    pub message: String,
+    /// Arbitrary metadata (e.g., tool_name, parameters)
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// User/consumer decision for a confirmation request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfirmationDecision {
+    /// Whether the action is approved
+    pub approved: bool,
+    /// Optional note/reason
+    pub note: Option<String>,
+}
+
 /// Rich tool execution information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolExecutionInfo {
@@ -247,6 +278,18 @@ pub trait AgentOutput: Send + Sync {
             metadata: HashMap::new(),
         })
         .await
+    }
+
+    /// Request a confirmation decision from the output handler (UI/API)
+    /// Default: deny (safe). Concrete outputs (CLI/UI) should override to prompt.
+    async fn request_confirmation(
+        &self,
+        _request: &ConfirmationRequest,
+    ) -> Result<ConfirmationDecision, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(ConfirmationDecision {
+            approved: false,
+            note: Some("No confirmation handler available; default deny".to_string()),
+        })
     }
 
     /// Check if this output handler supports real-time updates
