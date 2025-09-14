@@ -7,12 +7,15 @@ use crate::interactive::components::status_line::StatusLineContext;
 use crate::interactive::message_handler::{app_message_to_ui_message, AppMessage};
 use crate::interactive::pages::main_page::MainPage;
 use crate::interactive::pages::router_test::RouterTestPage;
-use crate::interactive::router::{UIRouter, UIRouterBuilder};
 use crate::interactive::terminal_output::{output_content_block, overwrite_previous_lines};
 use anyhow::Result;
 use coro_core::ResolvedLlmConfig;
+use coro_router as router;
 use iocraft::prelude::*;
 use regex::Regex;
+use router::integration::{ReactiveRouterHandle, RouterContext};
+use router::UIRouter;
+use router::UIRouterBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
@@ -552,34 +555,33 @@ fn CoroApp(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         agent: app_context.agent.clone(),
     };
 
-    // Create router configuration with main page using new API
-    let build_result: crate::interactive::router::integration::UIRouterBuildResult =
-        UIRouterBuilder::new()
-            .route("main", "Main", move |_hooks| {
-                element! {
-                    MainPage(
-                        status_context: status_context.clone(),
-                        input_context: input_context.clone()
-                    )
-                }
-                .into()
-            })
-            .route("router_test", "Router Test", move |_hooks| {
-                element! {
-                    RouterTestPage()
-                }
-                .into()
-            })
-            .default("main")
-            .build()
-            .expect("Failed to build router");
+    // 使用 coro-router 构建路由并提供上下文
+    let build_result = UIRouterBuilder::new()
+        .route("main", "Main", move |_hooks| {
+            element! {
+                MainPage(
+                    status_context: status_context.clone(),
+                    input_context: input_context.clone()
+                )
+            }
+            .into()
+        })
+        .route("router_test", "Router Test", move |_hooks| {
+            element! { RouterTestPage() }.into()
+        })
+        .default("main")
+        .build()
+        .expect("Failed to build router");
+
+    // 创建 RouterHandle 与 Context
+    let handle = ReactiveRouterHandle::new_with_hooks(&mut hooks, build_result.config.clone());
+    let router_context = RouterContext { handle };
+    let shared_build_result = Arc::new(build_result);
 
     element! {
-        UIRouter(
-            config: build_result.props.config,
-            pages: build_result.props.pages,
-            fallback_page: build_result.props.fallback_page
-        )
+        ContextProvider(value: Context::owned(router_context)) {
+            UIRouter(build_result: shared_build_result)
+        }
     }
 }
 

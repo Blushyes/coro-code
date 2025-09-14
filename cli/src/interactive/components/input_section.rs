@@ -11,8 +11,8 @@ use crate::interactive::file_search::{
 };
 use crate::interactive::input_history::InputHistory;
 use crate::interactive::message_handler::AppMessage;
-use crate::interactive::router::use_router_handle;
 use coro_core::ResolvedLlmConfig;
+use coro_router::use_router;
 use iocraft::prelude::*;
 use std::cmp::min;
 use std::path::PathBuf;
@@ -1013,8 +1013,8 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
     let input_history = hooks.use_state(InputHistory::new);
     let history_initialized = hooks.use_state(|| false);
 
-    // Router handle for navigation - now using reactive system
-    let router_handle = use_router_handle(&mut hooks);
+    // Router for navigation - coro-router API
+    let router = use_router(&mut hooks);
 
     // Initialize cursor position when input value changes
     let mut cursor_position_init = cursor_position;
@@ -1187,7 +1187,7 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                     let mut input_value = input_value;
                     let mut cursor_position = cursor_position;
                     let mut input_history = input_history;
-                    let mut router_handle = router_handle.clone();
+                    let mut router = router.clone();
                     let ui_sender = ui_sender.clone();
                     let llm_config = llm_config.clone();
                     let project_path = project_path.clone();
@@ -1200,7 +1200,7 @@ pub fn InputSection(mut hooks: Hooks, props: &InputSectionProps) -> impl Into<An
                         // Check if input is "/test" and navigate to test page
                         if input.trim().to_lowercase() == "/test" {
                             // Navigate directly - no async needed!
-                            let _ = router_handle.navigate("router_test");
+                            let _ = router.navigate("router_test");
                             input_value.set(String::new());
                             cursor_position.set((1, 1));
                             return;

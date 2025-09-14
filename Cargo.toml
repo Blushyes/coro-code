@@ -40,7 +40,7 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # Error handling
 anyhow = "1.0"
-thiserror = "2.0"
+thiserror = "2.0.16"
 
 # Logging
 tracing = "0.1"
@@ -50,7 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 
 # Terminal UI
-iocraft = { git = "https://github.com/Blushyes/iocraft", rev = "a723a8c3de73ffb98d94ad46a33bdd1a21a5f9f0" }
+iocraft = "0.7.11"
 # iocraft = "0.7"
 crossterm = "0.29"
 smol = "2.0"
@@ -73,3 +73,6 @@ ignore = "0.4"
 
 # Process execution
 which = "8.0"
+
+
+[patch.crates-io]

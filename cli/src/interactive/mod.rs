@@ -8,7 +8,7 @@ pub mod file_search;
 pub mod input_history;
 pub mod message_handler;
 pub mod pages;
-pub mod router;
+
 pub mod state;
 pub mod task_executor;
 pub mod terminal_output;

@@ -2,8 +2,8 @@
 //!
 //! This page provides a test interface for the router system with navigation options.
 
-use crate::interactive::router::use_router_handle;
 use iocraft::prelude::*;
+use coro_router::use_router;
 
 /// Navigation options available on the router test page
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -45,8 +45,8 @@ pub fn RouterTestPage(
     mut hooks: Hooks,
     _props: &RouterTestPageProps,
 ) -> impl Into<AnyElement<'static>> {
-    // Get router handle for navigation
-    let router_handle = use_router_handle(&mut hooks);
+    // Get router from coro-router
+    let router = use_router(&mut hooks);
 
     // State for currently selected option
     let selected_option = hooks.use_state(|| NavigationOption::GoBack);
@@ -54,7 +54,7 @@ pub fn RouterTestPage(
     // Handle keyboard input
     hooks.use_terminal_events({
         let mut selected_option = selected_option;
-        let mut router_handle = router_handle.clone();
+        let mut router = router.clone();
         move |event| {
             if let TerminalEvent::Key(key_event) = event {
                 match key_event.code {
@@ -88,7 +88,7 @@ pub fn RouterTestPage(
                         let route_id = current.route_id();
 
                         // Navigate using the reactive router system
-                        if let Err(e) = router_handle.navigate(route_id) {
+                        if let Err(e) = router.navigate(route_id) {
                             // Handle navigation error (could log or show error message)
                             eprintln!("Navigation error: {:?}", e);
                         }
