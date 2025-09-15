@@ -26,7 +26,10 @@ impl AbortController {
 
     /// Trigger cancellation (idempotent)
     pub fn cancel(&self) {
-        let _ = self.tx.send(true);
+        let result = self.tx.send(true);
+        // We can't use output handler here as AbortController doesn't have access to it
+        // This is fine as this is the lowest level and should work silently
+        let _ = result; // Suppress unused variable warning
     }
 }
 

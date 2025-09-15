@@ -98,6 +98,9 @@ pub async fn execute_agent_task_with_context(
         }
     });
 
+    // Create abort controller for this task execution (outside of agent lock)
+    let (abort_controller, _) = coro_core::agent::AbortController::new();
+
     // Lock the agent for the duration of this task
     let mut agent_guard = agent.lock().await;
 
@@ -129,17 +132,22 @@ pub async fn execute_agent_task_with_context(
             ui_sender.clone(),
         )));
 
-        // Create new agent
+        // Create new agent with abort controller
         let new_agent = coro_core::agent::AgentCore::new_with_output_and_registry(
             agent_config,
             llm_config,
             token_tracking_output,
             tool_registry,
-            None,
+            Some(abort_controller.clone()),
         )
         .await?;
 
         *agent_guard = Some(new_agent);
+    } else {
+        // Agent exists, update its abort controller for this task
+        if let Some(existing_agent) = agent_guard.as_mut() {
+            existing_agent.set_abort_controller(abort_controller.clone());
+        }
     }
 
     // Get mutable reference to the agent
@@ -148,16 +156,13 @@ pub async fn execute_agent_task_with_context(
     // Execute task with conversation continuation
     let task_future = agent_ref.execute_task_with_context(&task, &project_path);
 
-    // Listen for interruption signals - cancel the persistent agent when triggered
-    let agent_for_cancel = agent.clone();
+    // Listen for interruption signals - cancel via external abort controller
+    let abort_controller_for_cancel = abort_controller.clone();
     let interrupt_future = async move {
         loop {
             match interrupt_receiver.recv().await {
                 Ok(AppMessage::AgentExecutionInterrupted { .. }) => {
-                    if let Some(a) = agent_for_cancel.lock().await.as_ref() {
-                        a.cancel();
-                    }
-                    tracing::warn!("Task interrupted by user");
+                    abort_controller_for_cancel.cancel();
                     return Err(anyhow::anyhow!("Task interrupted by user"));
                 }
                 Ok(_) => continue, // Ignore other messages

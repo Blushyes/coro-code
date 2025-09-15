@@ -29,8 +29,10 @@ pub struct AgentCore {
     current_task_displayed: bool,
     execution_context: Option<AgentExecutionContext>,
     conversation_manager: ConversationManager,
-    // Global cancellation controller injected at creation
+    // Global cancellation controller for external cancel calls
     abort_controller: crate::agent::AbortController,
+    // Registration derived from the abort controller for checking cancellation state
+    abort_registration: crate::agent::AbortRegistration,
 }
 
 impl AgentCore {
@@ -69,8 +71,14 @@ impl AgentCore {
         let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
         let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
 
-        // Configure cancellation controller
-        let ac = abort_controller.unwrap_or_else(|| crate::agent::AbortController::new().0);
+        // Configure cancellation controller and registration
+        let (abort_controller, abort_registration) = if let Some(controller) = abort_controller {
+            let registration = controller.subscribe();
+            (controller, registration)
+        } else {
+            // Create a new controller/registration pair for standalone operation
+            crate::agent::AbortController::new()
+        };
 
         Ok(Self {
             config: agent_config,
@@ -82,7 +90,8 @@ impl AgentCore {
             current_task_displayed: false,
             execution_context: None,
             conversation_manager,
-            abort_controller: ac,
+            abort_controller,
+            abort_registration,
         })
     }
 
@@ -94,6 +103,12 @@ impl AgentCore {
     /// Request cancellation on this agent
     pub fn cancel(&self) {
         self.abort_controller.cancel();
+    }
+
+    /// Set a new abort controller for this agent (used for task-specific cancellation)
+    pub fn set_abort_controller(&mut self, abort_controller: crate::agent::AbortController) {
+        self.abort_registration = abort_controller.subscribe();
+        self.abort_controller = abort_controller;
     }
 
     /// Create a new TraeAgent with custom tool registry and output handler
@@ -131,8 +146,14 @@ impl AgentCore {
         let max_tokens = llm_config.params.max_tokens.unwrap_or(8192);
         let conversation_manager = ConversationManager::new(max_tokens, llm_client.clone());
 
-        // Configure cancellation controller
-        let ac = abort_controller.unwrap_or_else(|| crate::agent::AbortController::new().0);
+        // Configure cancellation controller and registration
+        let (abort_controller, abort_registration) = if let Some(controller) = abort_controller {
+            let registration = controller.subscribe();
+            (controller, registration)
+        } else {
+            // Create a new controller/registration pair for standalone operation
+            crate::agent::AbortController::new()
+        };
 
         Ok(Self {
             config: agent_config,
@@ -144,7 +165,8 @@ impl AgentCore {
             current_task_displayed: false,
             execution_context: None,
             conversation_manager,
-            abort_controller: ac,
+            abort_controller,
+            abort_registration,
         })
     }
 
@@ -194,6 +216,24 @@ impl AgentCore {
 
     /// Execute a single step of the agent
     async fn execute_step(&mut self, step: usize, project_path: &Path) -> Result<bool> {
+        // Clone the stored registration for this step
+        let mut cancel_reg = self.abort_registration.clone();
+
+        // Race the entire step execution with cancellation
+        tokio::select! {
+            _ = cancel_reg.cancelled() => {
+                // Step was cancelled
+                let _ = self.output.normal("⏹ Task interrupted by user").await;
+                return Err("Task interrupted by user".into());
+            }
+            result = self.execute_step_inner(step, project_path) => {
+                result
+            }
+        }
+    }
+
+    /// Execute the actual step logic
+    async fn execute_step_inner(&mut self, step: usize, project_path: &Path) -> Result<bool> {
         // Prepare messages - only add system prompt if conversation history doesn't start with one
         let mut messages = Vec::new();
         let needs_system_prompt = self.conversation_history.is_empty()
@@ -679,15 +719,27 @@ impl AgentCore {
         let mut task_completed = false;
 
         let mut interrupted = false;
-        // Subscribe to global cancellation
-        let mut cancel_reg = self.abort_controller.subscribe();
+        // Clone the stored registration for global cancellation
+        let mut cancel_reg = self.abort_registration.clone();
 
         // Execute steps until completion or max steps reached
         while step < self.config.max_steps && !task_completed {
             step += 1;
 
+            // Check for cancellation before each step
+            if cancel_reg.is_cancelled() {
+                interrupted = true;
+                break;
+            }
+
             // Apply intelligent compression before each step to manage token usage
             self.apply_intelligent_compression().await?;
+
+            // Check again after compression
+            if cancel_reg.is_cancelled() {
+                interrupted = true;
+                break;
+            }
 
             // Race step execution with cancellation
             tokio::select! {
@@ -940,7 +992,7 @@ mod tests {
             std::sync::Arc::new(MockLlmClient::new()),
         );
 
-        let (ac, _reg) = crate::agent::AbortController::new();
+        let (ac, reg) = crate::agent::AbortController::new();
 
         let agent = AgentCore {
             config: agent_config,
@@ -953,6 +1005,7 @@ mod tests {
             execution_context: None,
             conversation_manager,
             abort_controller: ac,
+            abort_registration: reg,
         };
 
         let project_path = PathBuf::from("/some/project/path");
