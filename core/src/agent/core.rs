@@ -401,10 +401,30 @@ impl AgentCore {
                                 "Execution cancelled by user".to_string(),
                             )
                         } else {
-                            self.tool_executor.execute(tool_call.clone()).await?
+                            // Handle tool execution errors gracefully
+                            match self.tool_executor.execute(tool_call.clone()).await {
+                                Ok(result) => result,
+                                Err(e) => {
+                                    tracing::error!("Tool execution failed for {}: {}", name, e);
+                                    crate::tools::ToolResult::error(
+                                        id.clone(),
+                                        format!("Tool execution failed: {}", e),
+                                    )
+                                }
+                            }
                         }
                     } else {
-                        self.tool_executor.execute(tool_call.clone()).await?
+                        // Handle tool execution errors gracefully
+                        match self.tool_executor.execute(tool_call.clone()).await {
+                            Ok(result) => result,
+                            Err(e) => {
+                                tracing::error!("Tool execution failed for {}: {}", name, e);
+                                crate::tools::ToolResult::error(
+                                    id.clone(),
+                                    format!("Tool execution failed: {}", e),
+                                )
+                            }
+                        }
                     };
 
                     // Create completed tool execution info and emit completed event
@@ -1026,5 +1046,139 @@ mod tests {
         assert!(!system_prompt.contains("/some/project/path"));
         assert!(!system_prompt.contains("IMPORTANT: When using tools that require file paths"));
         assert!(!system_prompt.contains("You are an expert AI software engineering agent"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_execution_error_handling() {
+        // Test that tool execution errors are handled gracefully
+        // and don't leave conversation history in an invalid state
+        use crate::llm::{ContentBlock, ToolDefinition};
+        use crate::output::events::NullOutput;
+        use std::path::PathBuf;
+
+        // Create a mock LLM client that returns a tool call for testing
+        struct ToolCallLlmClient;
+
+        #[async_trait]
+        impl LlmClient for ToolCallLlmClient {
+            async fn chat_completion(
+                &self,
+                messages: Vec<LlmMessage>,
+                _tools: Option<Vec<ToolDefinition>>,
+                _options: Option<ChatOptions>,
+            ) -> Result<LlmResponse> {
+                // Check if this is a continuation after tool result
+                let has_tool_result = messages.iter().any(|msg| {
+                    matches!(msg.role, crate::llm::MessageRole::Tool)
+                });
+
+                // If we have a tool result, return a simple text response
+                if has_tool_result {
+                    Ok(LlmResponse {
+                        message: LlmMessage {
+                            role: MessageRole::Assistant,
+                            content: MessageContent::Text("Understood, the tool execution failed but I can continue.".to_string()),
+                            metadata: None,
+                        },
+                        usage: None,
+                        model: "test-model".to_string(),
+                        finish_reason: None,
+                        metadata: None,
+                    })
+                } else {
+                    // First call: return a tool use that will fail
+                    Ok(LlmResponse {
+                        message: LlmMessage {
+                            role: MessageRole::Assistant,
+                            content: MessageContent::MultiModal(vec![ContentBlock::ToolUse {
+                                id: "test_id".to_string(),
+                                name: "bash".to_string(),  // Use a real tool that can fail
+                                input: serde_json::json!({
+                                    "command": "/nonexistent/command/that/will/fail"
+                                }),
+                            }]),
+                            metadata: None,
+                        },
+                        usage: None,
+                        model: "test-model".to_string(),
+                        finish_reason: None,
+                        metadata: None,
+                    })
+                }
+            }
+
+            fn model_name(&self) -> &str {
+                "test-model"
+            }
+
+            fn provider_name(&self) -> &str {
+                "test"
+            }
+        }
+
+        // Create agent with default tools (including bash)
+        let agent_config = AgentConfig {
+            max_steps: 5,
+            tools: vec!["bash".to_string()],  // Enable bash tool
+            ..Default::default()
+        };
+
+        let tool_registry = crate::tools::ToolRegistry::default();
+        let tool_executor = tool_registry.create_executor(&agent_config.tools);
+
+        let conversation_manager = ConversationManager::new(
+            8192,
+            std::sync::Arc::new(ToolCallLlmClient),
+        );
+
+        let (ac, reg) = crate::agent::AbortController::new();
+
+        let mut agent = AgentCore {
+            config: agent_config,
+            llm_client: std::sync::Arc::new(ToolCallLlmClient),
+            tool_executor,
+            trajectory_recorder: None,
+            conversation_history: Vec::new(),
+            output: Box::new(NullOutput),
+            current_task_displayed: false,
+            execution_context: None,
+            conversation_manager,
+            abort_controller: ac,
+            abort_registration: reg,
+        };
+
+        let project_path = PathBuf::from(".");
+
+        // Execute first task - this will trigger a tool call that fails
+        let result = agent
+            .execute_task_with_context("Test task 1", &project_path)
+            .await;
+
+        // Should not panic and should handle the error gracefully
+        assert!(result.is_ok());
+
+        // Verify conversation history contains tool result with error
+        let has_error_tool_result = agent.conversation_history.iter().any(|msg| {
+            if let MessageContent::MultiModal(blocks) = &msg.content {
+                blocks.iter().any(|block| {
+                    if let ContentBlock::ToolResult { content, .. } = block {
+                        content.contains("Tool execution failed") || content.contains("error")
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            }
+        });
+        assert!(has_error_tool_result, "Should have error tool result in history");
+
+        // Execute second task - this should not fail with API error about missing tool results
+        let result2 = agent
+            .execute_task_with_context("Test task 2", &project_path)
+            .await;
+
+        // Should succeed without API errors about missing tool results
+        assert!(result2.is_ok(), "Second task should execute without API errors");
     }
 }
