@@ -323,7 +323,7 @@ impl AgentCore {
         if response.message.has_tool_use() {
             let tool_uses = response.message.get_tool_uses();
 
-            for tool_use in tool_uses {
+            for tool_use in &tool_uses {
                 if let crate::llm::ContentBlock::ToolUse { id, name, input } = tool_use {
                     // Display tool execution based on output mode
                     let tool_call = crate::tools::ToolCall {
@@ -730,6 +730,53 @@ impl AgentCore {
                 .push(LlmMessage::system(self.get_system_prompt(project_path)));
         }
 
+        // Check if the last message was an assistant message with tool calls
+        // If so, we need to ensure there's a corresponding tool result
+        let needs_synthetic_results = if let Some(last_msg) = self.conversation_history.last() {
+            matches!(last_msg.role, crate::llm::MessageRole::Assistant) && last_msg.has_tool_use()
+        } else {
+            false
+        };
+
+        if needs_synthetic_results {
+            // Clone the last message to avoid borrow issues
+            let last_msg = self.conversation_history.last().unwrap().clone();
+
+            // The last assistant message has tool calls without results
+            // This can happen if the previous task was interrupted or failed
+            // Add a synthetic error result to maintain conversation validity
+            let tool_uses = last_msg.get_tool_uses();
+            let mut error_results = Vec::new();
+
+            for tool_use in &tool_uses {
+                if let crate::llm::ContentBlock::ToolUse { id, .. } = tool_use {
+                    let error_result = LlmMessage {
+                        role: crate::llm::MessageRole::Tool,
+                        content: crate::llm::MessageContent::MultiModal(vec![
+                            crate::llm::ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                is_error: Some(true),
+                                content: "Previous task interrupted or incomplete".to_string(),
+                            },
+                        ]),
+                        metadata: None,
+                    };
+                    error_results.push(error_result);
+                }
+            }
+
+            // Now add all error results to the conversation history
+            for error_result in error_results {
+                self.conversation_history.push(error_result);
+            }
+
+            if !tool_uses.is_empty() {
+                tracing::warn!(
+                    "Added synthetic tool results for incomplete tool calls from previous task"
+                );
+            }
+        }
+
         // Add user message with task
         let user_message = build_user_message(task);
         self.conversation_history
@@ -1068,16 +1115,19 @@ mod tests {
                 _options: Option<ChatOptions>,
             ) -> Result<LlmResponse> {
                 // Check if this is a continuation after tool result
-                let has_tool_result = messages.iter().any(|msg| {
-                    matches!(msg.role, crate::llm::MessageRole::Tool)
-                });
+                let has_tool_result = messages
+                    .iter()
+                    .any(|msg| matches!(msg.role, crate::llm::MessageRole::Tool));
 
                 // If we have a tool result, return a simple text response
                 if has_tool_result {
                     Ok(LlmResponse {
                         message: LlmMessage {
                             role: MessageRole::Assistant,
-                            content: MessageContent::Text("Understood, the tool execution failed but I can continue.".to_string()),
+                            content: MessageContent::Text(
+                                "Understood, the tool execution failed but I can continue."
+                                    .to_string(),
+                            ),
                             metadata: None,
                         },
                         usage: None,
@@ -1092,7 +1142,7 @@ mod tests {
                             role: MessageRole::Assistant,
                             content: MessageContent::MultiModal(vec![ContentBlock::ToolUse {
                                 id: "test_id".to_string(),
-                                name: "bash".to_string(),  // Use a real tool that can fail
+                                name: "bash".to_string(), // Use a real tool that can fail
                                 input: serde_json::json!({
                                     "command": "/nonexistent/command/that/will/fail"
                                 }),
@@ -1119,17 +1169,15 @@ mod tests {
         // Create agent with default tools (including bash)
         let agent_config = AgentConfig {
             max_steps: 5,
-            tools: vec!["bash".to_string()],  // Enable bash tool
+            tools: vec!["bash".to_string()], // Enable bash tool
             ..Default::default()
         };
 
         let tool_registry = crate::tools::ToolRegistry::default();
         let tool_executor = tool_registry.create_executor(&agent_config.tools);
 
-        let conversation_manager = ConversationManager::new(
-            8192,
-            std::sync::Arc::new(ToolCallLlmClient),
-        );
+        let conversation_manager =
+            ConversationManager::new(8192, std::sync::Arc::new(ToolCallLlmClient));
 
         let (ac, reg) = crate::agent::AbortController::new();
 
@@ -1171,7 +1219,10 @@ mod tests {
                 false
             }
         });
-        assert!(has_error_tool_result, "Should have error tool result in history");
+        assert!(
+            has_error_tool_result,
+            "Should have error tool result in history"
+        );
 
         // Execute second task - this should not fail with API error about missing tool results
         let result2 = agent
@@ -1179,6 +1230,9 @@ mod tests {
             .await;
 
         // Should succeed without API errors about missing tool results
-        assert!(result2.is_ok(), "Second task should execute without API errors");
+        assert!(
+            result2.is_ok(),
+            "Second task should execute without API errors"
+        );
     }
 }
