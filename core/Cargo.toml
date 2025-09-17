@@ -22,6 +22,7 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tree-sitter = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
@@ -42,15 +43,6 @@ tempfile = "3.0"
 bytes = "1.0"
 async-openai = "0.29"
 jsonpath-rust = "0.7"
-tree-sitter = "0.24"
-tree-sitter-rust = "0.23"
-tree-sitter-python = "0.23"
-tree-sitter-javascript = "0.23"
-tree-sitter-typescript = "0.23"
-tree-sitter-java = "0.23"
-tree-sitter-c = "0.23"
-tree-sitter-cpp = "0.23"
-tree-sitter-go = "0.23"
 rusqlite = { version = "0.32", features = ["bundled"] }
 parking_lot = "0.12"
 
