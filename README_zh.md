@@ -174,6 +174,34 @@ export CORO_MODEL="custom-model"
 
 ## 🛠️ 开发
 
+### 📦 上下文导出/恢复（持久化）
+
+核心库已提供上下文持久化能力，可将会话与执行上下文导出为 JSON，并在稍后恢复继续对话：
+
+```rust
+use coro_core::agent::{AgentBuilder, PersistedAgentContext};
+
+// 导出
+let json = agent.export_context_json()?;                   // 导出为 JSON 字符串
+agent.export_context_to_file(".coro/context.json")?;     // 或写入文件
+
+// 恢复
+agent.restore_context_from_json(&json)?;                  // 从 JSON 恢复
+agent.restore_context_from_file(".coro/context.json")?;  // 或从文件恢复
+
+// 如果需要自行读写：
+let snap = agent.export_context_snapshot()?;              // 获取结构化快照
+let json2 = snap.to_json()?;                              // 自行序列化
+let snap2 = PersistedAgentContext::from_json(&json2)?;    // 自行反序列化
+agent.restore_context_from_snapshot(snap2)?;              // 应用到 Agent
+```
+
+说明：
+
+- 快照包含 `conversation_history` 与 `AgentExecutionContext`，以及可选的 `AgentConfig`。
+- 恢复后会沿用保存时的配置（若快照内存在），并在后续执行时自动处理未配对的工具调用结果。
+- 导入后无需手动插入系统提示；代理在需要时会自动注入或压缩上下文。
+
 ### Pre-commit Hooks
 
 我们强烈建议设置 pre-commit hooks 来维护代码质量。仓库包含了自动安装 hooks 的脚本，这些 hooks 会在每次提交前运行格式化、代码检查和测试。

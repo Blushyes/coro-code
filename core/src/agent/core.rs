@@ -2,6 +2,7 @@
 
 use super::config::AgentConfig;
 use crate::agent::prompt::{build_system_prompt_with_context, build_user_message};
+use crate::agent::state::PersistedAgentContext;
 use crate::agent::tokens::ConversationManager;
 use crate::agent::{Agent, AgentExecution, AgentResult};
 use crate::error::{AgentError, Result};
@@ -93,6 +94,63 @@ impl AgentCore {
             abort_controller,
             abort_registration,
         })
+    }
+
+    /// Export the current conversation + execution context as a snapshot
+    pub fn export_context_snapshot(&self) -> Result<PersistedAgentContext> {
+        Ok(PersistedAgentContext::new(
+            self.agent_type().to_string(),
+            Some(self.config.clone()),
+            self.conversation_history.clone(),
+            self.execution_context.clone(),
+        ))
+    }
+
+    /// Export the current context to formatted JSON
+    pub fn export_context_json(&self) -> Result<String> {
+        let snap = self.export_context_snapshot()?;
+        snap.to_json()}
+
+    /// Export the current context to a file
+    pub fn export_context_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let snap = self.export_context_snapshot()?;
+        snap.to_file(path.as_ref())
+    }
+
+    /// Restore conversation + execution context from a snapshot
+    pub fn restore_context_from_snapshot(&mut self, snapshot: PersistedAgentContext) -> Result<()> {
+        // Optionally adopt saved config; keep existing if none provided
+        if let Some(cfg) = snapshot.config {
+            self.config = cfg;
+        }
+
+        // Replace histories with persisted ones
+        self.conversation_history = snapshot.conversation_history;
+        self.execution_context = snapshot.execution_context;
+
+        // Note: ConversationManager maintains an internal token estimate which
+        // will be refreshed on the next call to maybe_compress() during execute.
+        Ok(())
+    }
+
+    /// Restore from a JSON string (produced by export_context_json)
+    pub fn restore_context_from_json(&mut self, json: &str) -> Result<()> {
+        let snapshot = PersistedAgentContext::from_json(json)?;
+        self.restore_context_from_snapshot(snapshot)
+    }
+
+    /// Restore from a file path (produced by export_context_to_file)
+    pub fn restore_context_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let snapshot = PersistedAgentContext::from_file(path.as_ref())?;
+        self.restore_context_from_snapshot(snapshot)
+    }
+
+    /// Restore only the conversation history directly, without a full snapshot
+    pub fn restore_from_history(&mut self, history: Vec<LlmMessage>) -> Result<()> {
+        self.conversation_history = history;
+        // Clear execution context to avoid stale state when only history is provided
+        self.execution_context = None;
+        Ok(())
     }
 
     /// Get agent configuration
