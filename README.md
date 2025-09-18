@@ -188,6 +188,34 @@ coro --config custom.json "Analyze this codebase"
 
 ## 🛠️ Development
 
+### Context Export/Restore (Persistence)
+
+The core supports exporting the conversation and execution context to JSON and restoring it later:
+
+```rust
+use coro_core::agent::{AgentBuilder, PersistedAgentContext};
+
+// Export
+let json = agent.export_context_json()?;                    // as JSON string
+agent.export_context_to_file(".coro/context.json")?;       // or to file
+
+// Restore
+agent.restore_context_from_json(&json)?;                    // from JSON
+agent.restore_context_from_file(".coro/context.json")?;    // or from file
+
+// Work with the structured snapshot directly:
+let snap = agent.export_context_snapshot()?;
+let json2 = snap.to_json()?;
+let snap2 = PersistedAgentContext::from_json(&json2)?;
+agent.restore_context_from_snapshot(snap2)?;
+```
+
+Notes:
+
+- Snapshot contains `conversation_history`, `AgentExecutionContext`, and optional `AgentConfig`.
+- On restore, saved config (if present) is applied; missing tool-result pairs are handled automatically on next execution.
+- No need to manually re-inject a system prompt; the agent handles that as needed.
+
 ### Pre-commit Hooks
 
 We strongly recommend setting up pre-commit hooks to maintain code quality. The repository includes scripts to automatically install hooks that run formatting, linting, and tests before each commit.
