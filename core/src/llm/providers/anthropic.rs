@@ -223,3 +223,208 @@ struct AnthropicUsage {
     input_tokens: u32,
     output_tokens: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{MessageContent, FunctionDefinition};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn create_test_config() -> ResolvedLlmConfig {
+        use crate::config::{Protocol};
+        ResolvedLlmConfig {
+            protocol: Protocol::Anthropic,
+            api_key: "test-key".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            model: "claude-3-sonnet-20240229".to_string(),
+            params: Default::default(),
+            headers: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_anthropic_client_creation() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        assert_eq!(client.model_name(), "claude-3-sonnet-20240229");
+        assert_eq!(client.provider_name(), "anthropic");
+        assert!(client.supports_streaming());
+    }
+
+    #[test]
+    fn test_anthropic_client_empty_api_key() {
+        let mut config = create_test_config();
+        config.api_key = String::new();
+
+        let result = AnthropicClient::new(&config);
+        assert!(result.is_err());
+
+        if let Err(crate::error::Error::Llm(LlmError::Authentication { message })) = result {
+            assert_eq!(message, "No API key found for Anthropic");
+        } else {
+            panic!("Expected authentication error");
+        }
+    }
+
+    #[test]
+    fn test_build_request_basic() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let messages = vec![
+            LlmMessage::system("You are a helpful assistant"),
+            LlmMessage::user("Hello, world!"),
+        ];
+
+        let request = client.build_request(messages, None, None).unwrap();
+
+        assert_eq!(request.model, "claude-3-sonnet-20240229");
+        assert_eq!(request.max_tokens, 4096);
+        assert_eq!(request.temperature, 0.5);
+        assert_eq!(request.system, Some("You are a helpful assistant".to_string()));
+        assert_eq!(request.messages.len(), 1);
+        assert!(request.tools.is_none());
+        assert!(request.stop_sequences.is_none());
+    }
+
+    #[test]
+    fn test_build_request_with_options() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let messages = vec![LlmMessage::user("Hello")];
+        let options = ChatOptions {
+            max_tokens: Some(2048),
+            temperature: Some(0.8),
+            stop: Some(vec!["STOP".to_string()]),
+            ..Default::default()
+        };
+
+        let request = client.build_request(messages, None, Some(options)).unwrap();
+
+        assert_eq!(request.max_tokens, 2048);
+        assert_eq!(request.temperature, 0.8);
+        assert_eq!(request.stop_sequences, Some(vec!["STOP".to_string()]));
+    }
+
+    #[test]
+    fn test_build_request_with_tools() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let messages = vec![LlmMessage::user("Use a tool")];
+        let tool = ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "test_tool".to_string(),
+                description: "A test tool".to_string(),
+                parameters: json!({"type": "object"}),
+            },
+        };
+
+        let request = client.build_request(messages, Some(vec![tool]), None).unwrap();
+
+        assert!(request.tools.is_some());
+        let tools = request.tools.unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "test_tool");
+    }
+
+    #[test]
+    fn test_convert_response_basic() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let anthropic_response = AnthropicResponse {
+            id: "msg_123".to_string(),
+            model: "claude-3-sonnet-20240229".to_string(),
+            response_type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![AnthropicContent {
+                content_type: "text".to_string(),
+                text: "Hello! How can I help you?".to_string(),
+            }],
+            stop_reason: "end_turn".to_string(),
+            stop_sequence: None,
+            usage: Some(AnthropicUsage {
+                input_tokens: 10,
+                output_tokens: 20,
+            }),
+        };
+
+        let response = client.convert_response(anthropic_response);
+
+        assert_eq!(response.model, "claude-3-sonnet-20240229");
+        assert_eq!(response.finish_reason, Some(FinishReason::Stop));
+
+        if let MessageContent::Text(text) = &response.message.content {
+            assert_eq!(text, "Hello! How can I help you?");
+        } else {
+            panic!("Expected text content");
+        }
+
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
+    }
+
+    #[test]
+    fn test_convert_response_different_finish_reasons() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let test_cases = vec![
+            ("end_turn", FinishReason::Stop),
+            ("max_tokens", FinishReason::Length),
+            ("tool_use", FinishReason::ToolCalls),
+            ("unknown", FinishReason::Other("unknown".to_string())),
+        ];
+
+        for (stop_reason, expected_finish_reason) in test_cases {
+            let anthropic_response = AnthropicResponse {
+                id: "msg_123".to_string(),
+                model: "claude-3-sonnet-20240229".to_string(),
+                response_type: "message".to_string(),
+                role: "assistant".to_string(),
+                content: vec![AnthropicContent {
+                    content_type: "text".to_string(),
+                    text: "Test response".to_string(),
+                }],
+                stop_reason: stop_reason.to_string(),
+                stop_sequence: None,
+                usage: None,
+            };
+
+            let response = client.convert_response(anthropic_response);
+            assert_eq!(response.finish_reason, Some(expected_finish_reason));
+        }
+    }
+
+    #[test]
+    fn test_convert_response_empty_content() {
+        let config = create_test_config();
+        let client = AnthropicClient::new(&config).unwrap();
+
+        let anthropic_response = AnthropicResponse {
+            id: "msg_123".to_string(),
+            model: "claude-3-sonnet-20240229".to_string(),
+            response_type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![],
+            stop_reason: "end_turn".to_string(),
+            stop_sequence: None,
+            usage: None,
+        };
+
+        let response = client.convert_response(anthropic_response);
+
+        if let MessageContent::Text(text) = &response.message.content {
+            assert!(text.is_empty());
+        } else {
+            panic!("Expected text content");
+        }
+    }
+}
