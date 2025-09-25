@@ -214,3 +214,99 @@ impl Default for TrajectoryRecorder {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trajectory::{EntryType};
+    use tempfile::tempdir;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_trajectory_recorder_creation() {
+        let recorder = TrajectoryRecorder::new();
+        assert_eq!(recorder.entry_count().await, 0);
+        assert!(recorder.file_path().is_none());
+        assert!(!recorder.auto_save);
+    }
+
+    #[tokio::test]
+    async fn test_trajectory_recorder_with_file() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test_trajectory.json");
+
+        let recorder = TrajectoryRecorder::with_file(&file_path);
+        assert_eq!(recorder.entry_count().await, 0);
+        assert_eq!(recorder.file_path(), Some(file_path.as_path()));
+        assert!(recorder.auto_save);
+    }
+
+    #[tokio::test]
+    async fn test_record_entry() {
+        let recorder = TrajectoryRecorder::new();
+
+        let entry = TrajectoryEntry::new(EntryType::TaskStart {
+            task: "Test task".to_string(),
+            agent_config: json!({"type": "test_agent"}),
+        }, 0);
+
+        recorder.record(entry.clone()).await.unwrap();
+        assert_eq!(recorder.entry_count().await, 1);
+
+        let entries = recorder.get_entries().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, entry.id);
+    }
+
+    #[tokio::test]
+    async fn test_clear_entries() {
+        let recorder = TrajectoryRecorder::new();
+
+        let entry = TrajectoryEntry::new(EntryType::TaskStart {
+            task: "Test task".to_string(),
+            agent_config: json!({"type": "test_agent"}),
+        }, 0);
+
+        recorder.record(entry).await.unwrap();
+        assert_eq!(recorder.entry_count().await, 1);
+
+        recorder.clear().await;
+        assert_eq!(recorder.entry_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_trajectory_metadata_serialization() {
+        let metadata = TrajectoryMetadata {
+            id: "test-id".to_string(),
+            started_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+            version: "1.0".to_string(),
+            agent_type: "test_agent".to_string(),
+            task: Some("Test task".to_string()),
+            success: Some(true),
+            total_steps: 5,
+            duration_ms: Some(1000),
+        };
+
+        let serialized = serde_json::to_string(&metadata).unwrap();
+        let deserialized: TrajectoryMetadata = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(metadata.id, deserialized.id);
+        assert_eq!(metadata.version, deserialized.version);
+        assert_eq!(metadata.agent_type, deserialized.agent_type);
+        assert_eq!(metadata.task, deserialized.task);
+        assert_eq!(metadata.success, deserialized.success);
+        assert_eq!(metadata.total_steps, deserialized.total_steps);
+        assert_eq!(metadata.duration_ms, deserialized.duration_ms);
+    }
+
+    #[tokio::test]
+    async fn test_auto_filename_recorder() {
+        let recorder = TrajectoryRecorder::with_auto_filename();
+
+        let file_path = recorder.file_path().unwrap();
+        assert!(file_path.file_name().unwrap().to_str().unwrap().starts_with("trajectory_"));
+        assert!(file_path.file_name().unwrap().to_str().unwrap().ends_with(".json"));
+        assert_eq!(file_path.parent().unwrap().file_name().unwrap(), "trajectories");
+    }
+}
