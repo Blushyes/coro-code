@@ -464,7 +464,7 @@ impl Tool for BashTool {
     }
 
     fn requires_confirmation(&self) -> bool {
-        true // Bash commands can be dangerous
+        false // Bash commands can be dangerous
     }
 
     fn examples(&self) -> Vec<ToolExample> {
